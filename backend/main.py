@@ -88,28 +88,68 @@ def convert_to_wav(input_path: str) -> tuple[str, bool]:
 
 def run_recognition(audio_path: str) -> dict:
     """
-    Core recognition logic — fingerprint the clip,
-    query the DB, vote on the best match, return song details.
+    Core recognition logic — fingerprint the clip, query the DB,
+    then use TIME-OFFSET ALIGNMENT to find the best match.
+
+    Why time-offset alignment instead of simple voting?
+    ────────────────────────────────────────────────────
+    Simple voting (count matching hashes per song) breaks in noisy
+    conditions because noise can randomly generate hashes that happen
+    to exist in the database for the wrong song.
+
+    Time-offset alignment adds a second constraint: for a REAL match,
+    every matching hash must agree that the clip starts at the same
+    position in the song. Concretely:
+
+        time_delta = time_in_song - time_in_clip
+
+    If 50 hashes all have the same time_delta for song X, that's a
+    genuine alignment — the probability of noise doing that by chance
+    is astronomically low. Random noise hits scatter across all deltas
+    and never accumulate enough votes to win.
     """
     hashes = fingerprint(audio_path)
 
     if not hashes:
         raise HTTPException(status_code=400, detail="Could not extract fingerprints from audio")
 
-    hash_vals = [h[0] for h in hashes]
+    # Build a lookup: hash_value → time position in the clip
+    clip_time = {h[0]: h[1] for h in hashes}
+
+    hash_vals = list(clip_time.keys())
     matches = query_fingerprints(hash_vals)
 
     if not matches:
         raise HTTPException(status_code=404, detail="No matching song found")
 
-    # vote — whichever song_id appears most is the winner
-    song_id_counts = Counter(m["song_id"] for m in matches)
-    best_song_id, hit_count = song_id_counts.most_common(1)[0]
+    # Vote by (song_id, time_delta) pairs.
+    # Bin deltas in groups of 2 frames to absorb tiny timing jitter.
+    alignment_votes = Counter()
+    for m in matches:
+        song_id = m["song_id"]
+        time_in_song = m["time_offset"]
+        time_in_clip = clip_time.get(m["hash"], 0)
+        delta = time_in_song - time_in_clip
+        binned_delta = round(delta / 2) * 2   # bin width = 2 frames
+        alignment_votes[(song_id, binned_delta)] += 1
+
+    # The winner is the (song_id, delta) pair with the most aligned hashes
+    (best_song_id, best_delta), hit_count = alignment_votes.most_common(1)[0]
+
+    # Minimum threshold — if the best alignment is too weak, reject it.
+    # A genuine match typically produces 10+ aligned hashes. Anything below
+    # this is likely noise or a song not in the database.
+    MIN_ALIGNED_HASHES = 10
+    if hit_count < MIN_ALIGNED_HASHES:
+        raise HTTPException(status_code=404, detail="No matching song found")
 
     song = get_song_by_id(best_song_id)
 
     if not song:
         raise HTTPException(status_code=404, detail="Matched song not found in database")
+
+    # Convert frame delta to seconds (hop_length=512, sr=22050 by default in librosa)
+    offset_seconds = round(best_delta * 512 / 22050, 2)
 
     return {
         "title": song["title"],
@@ -118,6 +158,7 @@ def run_recognition(audio_path: str) -> dict:
         "filename": song.get("filename"),
         "song_id": best_song_id,
         "matched_hashes": hit_count,
+        "offset_seconds": offset_seconds,
     }
 
 
@@ -269,15 +310,10 @@ async def identify_upload(file: UploadFile = File(...)):
         if wav_path and wav_path != tmp_path and os.path.exists(wav_path):
             os.unlink(wav_path)
 
-    # FIX 2: rename + add missing fields so frontend IdentifyResponse is satisfied
     hashes_matched = result.pop("matched_hashes", 0)
     result["hashes_matched"] = hashes_matched
-
-    # Confidence: 200+ matching hashes = ~100%; scale linearly below that.
     result["confidence"] = min(1.0, hashes_matched / 200)
-
-    # Offset: placeholder (proper time-alignment pass would compute this)
-    result["offset"] = 0.0
+    result["offset"] = result.pop("offset_seconds", 0.0)
 
     return result
 
