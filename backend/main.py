@@ -472,7 +472,7 @@ async def recognize_stream(websocket: WebSocket):
             print("No match found")
             await websocket.send_json({"status": "no_match"})
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.5)
         await websocket.close()
 
     except WebSocketDisconnect:
