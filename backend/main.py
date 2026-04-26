@@ -171,6 +171,7 @@ async def recognize_upload(file: UploadFile = File(...)):
     try:
         with open(tmp_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
+
         wav_path, _ = convert_to_wav(tmp_path)
         result = run_recognition(wav_path)
     finally:
@@ -179,6 +180,7 @@ async def recognize_upload(file: UploadFile = File(...)):
             os.unlink(tmp_path)
         if wav_path and wav_path != tmp_path and os.path.exists(wav_path):
             os.unlink(wav_path)
+
 
     return result
 
@@ -198,8 +200,10 @@ async def recognize_from_mic(duration: int = 10):
     try:
         result = run_recognition(clip_path)
     finally:
+
         if os.path.exists(clip_path):
             os.unlink(clip_path)
+
 
     return result
 
@@ -213,16 +217,21 @@ async def add_song(
     title: str = Form(...),
     artist: str = Form(...),
     youtube_url: str = Form(None),
+
     file: UploadFile = File(...),
+
 ):
     suffix = os.path.splitext(file.filename)[-1] or ".mp3"
     tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
     tmp_path = tmp.name
+
     wav_path = None
+
 
     try:
         with open(tmp_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
+
         wav_path, _ = convert_to_wav(tmp_path)
         hashes = fingerprint(wav_path)
 
@@ -234,6 +243,7 @@ async def add_song(
             artist=artist,
             filename=file.filename,
             hashes=hashes,
+
             youtube_url=youtube_url,
         )
     finally:
@@ -243,12 +253,15 @@ async def add_song(
         if wav_path and wav_path != tmp_path and os.path.exists(wav_path):
             os.unlink(wav_path)
 
+
     return {
         "message": "Song added successfully",
         "song_id": song_id,
         "title": title,
         "artist": artist,
+
         "fingerprints_stored": len(hashes),
+
     }
 
 
@@ -258,9 +271,11 @@ async def add_song(
 
 @app.get("/songs")
 async def list_songs():
+
     from database import get_client
     client = get_client()
     response = client.table("songs").select("*").execute()
+
     return {"songs": response.data, "count": len(response.data)}
 
 
@@ -270,6 +285,7 @@ async def list_songs():
 
 @app.get("/")
 async def root():
+
     return {"status": "WaveJack API is running"}
 
 
@@ -463,3 +479,4 @@ async def recognize_stream(websocket: WebSocket):
         print("Client disconnected unexpectedly")
     except Exception as e:
         print(f"Error: {e}")
+
