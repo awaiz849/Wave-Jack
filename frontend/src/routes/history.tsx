@@ -51,7 +51,7 @@ function HistoryPage() {
                 <tr>
                   <th className="px-5 py-4">Title</th>
                   <th className="px-5 py-4">Artist</th>
-                  <th className="px-5 py-4">Confidence</th>
+                  
                   <th className="px-5 py-4">Identified</th>
                 </tr>
               </thead>
@@ -60,9 +60,7 @@ function HistoryPage() {
                   <tr key={i} className="border-b border-white/5 hover:bg-white/[0.03]">
                     <td className="px-5 py-4 font-semibold text-white">{it.title}</td>
                     <td className="px-5 py-4 text-white/70">{it.artist}</td>
-                    <td className="px-5 py-4 text-cyan">
-                      {it.confidence > 0 ? `${(it.confidence * 100).toFixed(0)}%` : "—"}
-                    </td>
+                    
                     <td className="px-5 py-4 text-white/50">{new Date(it.at).toLocaleString()}</td>
                   </tr>
                 ))}

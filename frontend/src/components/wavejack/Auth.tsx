@@ -11,7 +11,7 @@ export type HistoryItem = {
   title: string;
   artist: string;
   confidence: number;
-  hashes_matched: number;
+  hashes_matched?: number;
   at: number;
 };
 

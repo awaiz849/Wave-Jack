@@ -3,7 +3,7 @@ import sys
 import tempfile
 import shutil
 import subprocess
-
+import json
 sys.path.append("..")
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -17,7 +17,9 @@ from database import (
 )
 from record import record_clip
 from collections import Counter
-
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from recognizer import fingerprint_buffer, query_hashes
+import asyncio
 app = FastAPI(title="WaveJack API")
 
 # ─────────────────────────────────────────────
@@ -88,28 +90,61 @@ def convert_to_wav(input_path: str) -> tuple[str, bool]:
 
 def run_recognition(audio_path: str) -> dict:
     """
-    Core recognition logic — fingerprint the clip,
-    query the DB, vote on the best match, return song details.
+    Core recognition logic — fingerprint the clip, query the DB,
+    then use TIME-OFFSET ALIGNMENT to find the best match.
+
+    Why time-offset alignment instead of simple voting?
+    ────────────────────────────────────────────────────
+    Simple voting (count matching hashes per song) breaks in noisy
+    conditions because noise can randomly generate hashes that happen
+    to exist in the database for the wrong song.
+
+    Time-offset alignment adds a second constraint: for a REAL match,
+    every matching hash must agree that the clip starts at the same
+    position in the song. Concretely:
+
+        time_delta = time_in_song - time_in_clip
+
+    If 50 hashes all have the same time_delta for song X, that's a
+    genuine alignment — the probability of noise doing that by chance
+    is astronomically low. Random noise hits scatter across all deltas
+    and never accumulate enough votes to win.
     """
     hashes = fingerprint(audio_path)
 
     if not hashes:
         raise HTTPException(status_code=400, detail="Could not extract fingerprints from audio")
 
-    hash_vals = [h[0] for h in hashes]
+    # Build a lookup: hash_value → time position in the clip
+    clip_time = {h[0]: h[1] for h in hashes}
+
+    hash_vals = list(clip_time.keys())
     matches = query_fingerprints(hash_vals)
 
     if not matches:
         raise HTTPException(status_code=404, detail="No matching song found")
 
-    # vote — whichever song_id appears most is the winner
-    song_id_counts = Counter(m["song_id"] for m in matches)
-    best_song_id, hit_count = song_id_counts.most_common(1)[0]
+    # Vote by (song_id, time_delta) pairs.
+    # Bin deltas in groups of 2 frames to absorb tiny timing jitter.
+    alignment_votes = Counter()
+    for m in matches:
+        song_id = m["song_id"]
+        time_in_song = m["time_offset"]
+        time_in_clip = clip_time.get(m["hash"], 0)
+        delta = time_in_song - time_in_clip
+        binned_delta = round(delta / 2) * 2   # bin width = 2 frames
+        alignment_votes[(song_id, binned_delta)] += 1
+
+    # The winner is the (song_id, delta) pair with the most aligned hashes
+    (best_song_id, best_delta), hit_count = alignment_votes.most_common(1)[0]
 
     song = get_song_by_id(best_song_id)
 
     if not song:
         raise HTTPException(status_code=404, detail="Matched song not found in database")
+
+    # Convert frame delta to seconds (hop_length=512, sr=22050 by default in librosa)
+    offset_seconds = round(best_delta * 512 / 22050, 2)
 
     return {
         "title": song["title"],
@@ -118,6 +153,7 @@ def run_recognition(audio_path: str) -> dict:
         "filename": song.get("filename"),
         "song_id": best_song_id,
         "matched_hashes": hit_count,
+        "offset_seconds": offset_seconds,
     }
 
 
@@ -269,15 +305,10 @@ async def identify_upload(file: UploadFile = File(...)):
         if wav_path and wav_path != tmp_path and os.path.exists(wav_path):
             os.unlink(wav_path)
 
-    # FIX 2: rename + add missing fields so frontend IdentifyResponse is satisfied
     hashes_matched = result.pop("matched_hashes", 0)
     result["hashes_matched"] = hashes_matched
-
-    # Confidence: 200+ matching hashes = ~100%; scale linearly below that.
     result["confidence"] = min(1.0, hashes_matched / 200)
-
-    # Offset: placeholder (proper time-alignment pass would compute this)
-    result["offset"] = 0.0
+    result["offset"] = result.pop("offset_seconds", 0.0)
 
     return result
 
@@ -366,3 +397,69 @@ async def admin_stats():
 @app.get("/admin/logs")
 async def admin_logs():
     return {"logs": []}
+async def process_and_check(audio_bytes: bytes):
+    hashes = await asyncio.to_thread(fingerprint_buffer, audio_bytes)
+    return await asyncio.to_thread(query_hashes, hashes)
+
+@app.websocket("/ws/recognize")
+async def recognize_stream(websocket: WebSocket):
+    await websocket.accept()
+    audio_buffer = bytearray()
+    processing_task = None
+    print("WebSocket accepted")
+
+    try:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.receive":
+                if message.get("text"):
+                    data = json.loads(message["text"])
+                    if data.get("type") == "done":
+                        print(f"Done signal, total buffer: {len(audio_buffer)} bytes")
+                        break
+                elif message.get("bytes"):
+                    chunk = message["bytes"]
+                    audio_buffer.extend(chunk)
+                    print(f"Received chunk: {len(chunk)} bytes, total: {len(audio_buffer)}")
+
+                    # Check if previous background task found a match
+                    if processing_task and processing_task.done():
+                        match_result = processing_task.result()
+                        if match_result:
+                            print(f"Match found early: {match_result['title']}")
+                            await websocket.send_json({"status": "match", "result": match_result})
+                            await asyncio.sleep(1.5)
+                            await websocket.close()
+                            return
+
+                    # Start a new background task if enough data and none running
+                    if len(audio_buffer) >= 44100  and (processing_task is None or processing_task.done()):
+                        print("Starting background fingerprint task...")
+                        buffer_snapshot = bytes(audio_buffer)
+                        processing_task = asyncio.create_task(process_and_check(buffer_snapshot))
+
+                    await websocket.send_json({"status": "listening"})
+
+        # Recording ended — wait for running task or do a final query
+        if processing_task and not processing_task.done():
+            print("Waiting for background task to finish...")
+            match_result = await processing_task
+        else:
+            print("Running final query...")
+            hashes = await asyncio.to_thread(fingerprint_buffer, bytes(audio_buffer))
+            match_result = await asyncio.to_thread(query_hashes, hashes)
+
+        if match_result:
+            print(f"Match found: {match_result['title']}")
+            await websocket.send_json({"status": "match", "result": match_result})
+        else:
+            print("No match found")
+            await websocket.send_json({"status": "no_match"})
+
+        await asyncio.sleep(0.5)
+        await websocket.close()
+
+    except WebSocketDisconnect:
+        print("Client disconnected unexpectedly")
+    except Exception as e:
+        print(f"Error: {e}")

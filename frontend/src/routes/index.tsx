@@ -39,8 +39,6 @@ type IdentifyResponse = {
   title: string;
   artist: string;
   confidence: number;
-  offset: number;
-  hashes_matched: number;
   song_id?: number;
 };
 
@@ -58,6 +56,7 @@ function WaveJack() {
   const [state, setState] = useState<AppState>("idle");
   const [countdown, setCountdown] = useState(RECORD_SECONDS);
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [guestUses, setGuestUses] = useState(0);
   const [authMode, setAuthMode] = useState<"signin" | "signup" | null>(null);
   const [showLimit, setShowLimit] = useState(false);
   const [pipelineStep, setPipelineStep] = useState(0);
@@ -69,14 +68,17 @@ function WaveJack() {
 
   // Mic recording refs
   const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<BlobPart[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+// keep recorderRef, cdTimerRef, stopTimerRef
+// remove chunksRef and streamRef
   const cdTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  const waitingForResultRef = useRef(false);
+  const matchFoundRef = useRef(false);
   useEffect(() => {
-    setUser(getUser());
-  }, []);
+  setUser(getUser());
+  setGuestUses(getGuestUses());
+}, []);
 
   // Pipeline animation
   useEffect(() => {
@@ -104,60 +106,87 @@ function WaveJack() {
   };
 
   // ── START MIC RECORDING ──
-  const startListening = async () => {
-    if (!checkLimit()) return;
-    setResult(null);
-    setErrorMsg(null);
+ const startListening = async () => {
+  if (!checkLimit()) return;
+  matchFoundRef.current = false;      // ← add
+  waitingForResultRef.current = false; // ← add
+  setResult(null);
+  setErrorMsg(null);
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const recorder = new MediaRecorder(stream);
-      recorderRef.current = recorder;
-      chunksRef.current = [];
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ws = new WebSocket(`${API.replace("http", "ws")}/ws/recognize`);
+    wsRef.current = ws;
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
+    ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  if (data.status === "match") {
+    matchFoundRef.current = true;
+    waitingForResultRef.current = false;
+    finalizeResult(data.result);
+    // don't close here — let backend close it
+  } else if (data.status === "no_match") {
+    waitingForResultRef.current = false;
+    setErrorMsg("Song not found in database");
+    setState("error");
+   
+  }
+};
 
-      recorder.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        runProcessing(blob);
-      };
+ws.onclose = () => {
+  if (!matchFoundRef.current && !waitingForResultRef.current) setState("idle");
+  matchFoundRef.current = false;
+};
 
-      recorder.start(100); // collect data every 100ms
-      setState("listening");
+ws.onerror = () => {
+  setErrorMsg("WebSocket error — is the backend running?");
+  setState("error");
+  setTimeout(() => { setState("idle"); setErrorMsg(null); }, 5000);
+};
 
-      let sec = RECORD_SECONDS;
+
+
+    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+    recorderRef.current = recorder;
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+        ws.send(e.data);
+      }
+    };
+
+    recorder.start(2000); // send a chunk every 2s
+    setState("listening");
+
+    let sec = RECORD_SECONDS;
+    setCountdown(sec);
+    cdTimerRef.current = setInterval(() => {
+      sec--;
       setCountdown(sec);
+      if (sec <= 0) stopListening();
+    }, 1000);
+    stopTimerRef.current = setTimeout(stopListening, RECORD_SECONDS * 1000);
 
-      cdTimerRef.current = setInterval(() => {
-        sec--;
-        setCountdown(sec);
-        if (sec <= 0) stopListening();
-      }, 1000);
-
-      stopTimerRef.current = setTimeout(stopListening, RECORD_SECONDS * 1000);
-    } catch {
-      alert("Microphone access denied — please allow mic access or upload a file instead.");
-    }
-  };
+  } catch {
+    alert("Microphone access denied.");
+  }
+};
 
   const stopListening = () => {
-    if (cdTimerRef.current) {
-      clearInterval(cdTimerRef.current);
-      cdTimerRef.current = null;
+  if (cdTimerRef.current) { clearInterval(cdTimerRef.current); cdTimerRef.current = null; }
+  if (stopTimerRef.current) { clearTimeout(stopTimerRef.current); stopTimerRef.current = null; }
+  if (recorderRef.current && recorderRef.current.state !== "inactive") {
+    recorderRef.current.stop();
+  }
+  waitingForResultRef.current = true;
+  setState("processing");
+  // give recorder time to flush final chunk then signal done
+  setTimeout(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "done" }));
     }
-    if (stopTimerRef.current) {
-      clearTimeout(stopTimerRef.current);
-      stopTimerRef.current = null;
-    }
-    if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      recorderRef.current.stop();
-    }
-  };
-
+  }, 500);
+};
   // ── PROCESS AUDIO ──
   const runProcessing = async (file: Blob | File) => {
     setState("processing");
@@ -199,7 +228,6 @@ function WaveJack() {
       title: resp.title,
       artist: resp.artist,
       confidence: resp.confidence,
-      hashes_matched: resp.hashes_matched,
       at: Date.now(),
     };
 
@@ -217,7 +245,7 @@ function WaveJack() {
     ]);
 
     if (!user) incGuestUses();
-    setTimeout(() => setState("idle"), 5000);
+    
   };
 
   const handleFile = (file: File) => {
@@ -240,12 +268,12 @@ function WaveJack() {
   };
 
   const handleOrbClick = () => {
-    if (state === "listening") {
-      stopListening();
-      return;
-    }
-    if (state === "idle" || state === "error") startListening();
-  };
+  if (state === "listening") {
+    stopListening();
+    return;
+  }
+  if (state === "idle" || state === "error" || state === "result") startListening();
+};
 
   return (
     <div className="relative min-h-screen overflow-hidden">
@@ -298,7 +326,7 @@ function WaveJack() {
           ) : (
             <>
               <span className="text-xs text-white/40 mr-1">
-                {Math.max(0, 2 - getGuestUses())} free left
+                {Math.max(0, 2 - guestUses)} free left
               </span>
               <button
                 onClick={() => setAuthMode("signin")}
@@ -413,11 +441,7 @@ function WaveJack() {
                 <div className="text-xs uppercase tracking-[0.3em] text-cyan">match found</div>
                 <div className="mt-1 text-4xl font-bold text-gradient-wave">{result.title}</div>
                 <div className="mt-1 text-lg text-white/70">{result.artist}</div>
-                <div className="mt-2 text-xs text-white/40">
-                  confidence {(result.confidence * 100).toFixed(0)}% · {result.hashes_matched}{" "}
-                  hashes
-                  {result.offset ? ` · offset ${result.offset.toFixed(1)}s` : ""}
-                </div>
+                
               </motion.div>
             )}
           </AnimatePresence>
