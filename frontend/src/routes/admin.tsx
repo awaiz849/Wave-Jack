@@ -24,8 +24,7 @@ async function apiError(r: Response, fallback: string): Promise<string> {
   return typeof body?.detail === "string" ? body.detail : `${fallback} (HTTP ${r.status})`;
 }
 
-const inputClass =
-  "rounded-sm border border-border bg-transparent px-4 py-3 text-foreground placeholder:text-muted-foreground transition-colors focus:border-[var(--accent)] focus:outline-none";
+const inputClass = "field min-w-0 px-4 py-3";
 
 function AdminPage() {
   const navigate = useNavigate();
@@ -157,13 +156,19 @@ function AdminPage() {
     <PageShell>
       <div className="space-y-10">
         <div>
-          <h1 className="font-display text-4xl font-semibold text-foreground">Admin</h1>
+          <span className="inline-flex items-center gap-2 rounded-full border border-[rgb(192_132_252/0.25)] bg-[rgb(168_85_247/0.1)] px-3 py-1 text-xs text-accent-2">
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--accent-2)]" />
+            Admin only
+          </span>
+          <h1 className="font-display mt-4 text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
+            Library <span className="text-gradient">admin</span>
+          </h1>
           <p className="mt-2 text-muted-foreground">
             Manage the song library and review recent activity.
           </p>
         </div>
 
-        <div className="hairline-t hairline-b grid grid-cols-1 divide-y divide-border py-6 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <StatCard
             icon={<Music size={15} aria-hidden="true" />}
             label="Songs in library"
@@ -178,198 +183,206 @@ function AdminPage() {
 
         <section>
           <h2 className="font-display mb-4 text-xl font-semibold text-foreground">Add a song</h2>
-          <form onSubmit={submit} className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <label className="sr-only" htmlFor="song-title">
-              Title
-            </label>
-            <input
-              id="song-title"
-              required
-              maxLength={200}
-              placeholder="Title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className={inputClass}
-            />
-            <label className="sr-only" htmlFor="song-artist">
-              Artist
-            </label>
-            <input
-              id="song-artist"
-              required
-              maxLength={200}
-              placeholder="Artist"
-              value={artist}
-              onChange={(e) => setArtist(e.target.value)}
-              className={inputClass}
-            />
-            <label className="sr-only" htmlFor="song-youtube">
-              YouTube URL (optional)
-            </label>
-            <input
-              id="song-youtube"
-              type="url"
-              placeholder="YouTube URL (optional)"
-              value={youtube}
-              onChange={(e) => setYoutube(e.target.value)}
-              className={`${inputClass} md:col-span-2`}
-            />
-            <label className="sr-only" htmlFor="song-file">
-              Audio file
-            </label>
-            <input
-              key={fileInputKey}
-              id="song-file"
-              type="file"
-              accept="audio/*"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
-              className="min-w-0 rounded-sm border border-border bg-transparent px-4 py-3 text-sm text-muted-foreground file:mr-3 file:rounded-sm file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-foreground md:col-span-2"
-            />
-            <button
-              type="submit"
-              disabled={submitting}
-              className="flex items-center justify-center gap-2 rounded-sm bg-foreground py-3 font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-50 md:col-span-2"
-            >
-              <Upload size={16} aria-hidden="true" /> {submitting ? "Adding…" : "Add song"}
-            </button>
-            {msg && (
-              <div
-                role={msg.ok ? "status" : "alert"}
-                className={`text-sm md:col-span-2 ${msg.ok ? "text-signal" : "text-destructive"}`}
+          <div className="panel panel-edge rounded-[var(--radius)] p-5 sm:p-6">
+            <form onSubmit={submit} className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label className="sr-only" htmlFor="song-title">
+                Title
+              </label>
+              <input
+                id="song-title"
+                required
+                maxLength={200}
+                placeholder="Title"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                className={inputClass}
+              />
+              <label className="sr-only" htmlFor="song-artist">
+                Artist
+              </label>
+              <input
+                id="song-artist"
+                required
+                maxLength={200}
+                placeholder="Artist"
+                value={artist}
+                onChange={(e) => setArtist(e.target.value)}
+                className={inputClass}
+              />
+              <label className="sr-only" htmlFor="song-youtube">
+                YouTube URL (optional)
+              </label>
+              <input
+                id="song-youtube"
+                type="url"
+                placeholder="YouTube URL (optional)"
+                value={youtube}
+                onChange={(e) => setYoutube(e.target.value)}
+                className={`${inputClass} md:col-span-2`}
+              />
+              <label className="sr-only" htmlFor="song-file">
+                Audio file
+              </label>
+              <input
+                key={fileInputKey}
+                id="song-file"
+                type="file"
+                accept="audio/*"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                className="field min-w-0 px-4 py-3 text-sm text-muted-foreground file:mr-3 file:rounded-lg file:border-0 file:bg-[rgb(168_85_247/0.18)] file:px-3 file:py-1.5 file:text-foreground md:col-span-2"
+              />
+              <button
+                type="submit"
+                disabled={submitting}
+                className="btn-primary py-3 md:col-span-2"
               >
-                {msg.text}
-              </div>
-            )}
-          </form>
-          <p className="font-signal mt-3 text-xs text-muted-foreground">
-            Fingerprinting runs on upload — larger files take a few seconds.
-          </p>
-        </section>
-
-        <section>
-          <h2 className="font-display hairline-b mb-4 pb-4 text-xl font-semibold text-foreground">
-            Library
-          </h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="hairline-b font-signal text-xs text-muted-foreground">
-                <tr>
-                  <th scope="col" className="py-3 pr-4 font-normal">
-                    Title
-                  </th>
-                  <th scope="col" className="py-3 pr-4 font-normal">
-                    Artist
-                  </th>
-                  <th className="py-3">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {songsState === "loading" && (
-                  <tr>
-                    <td
-                      colSpan={3}
-                      role="status"
-                      className="font-signal py-10 text-center text-sm text-muted-foreground"
-                    >
-                      loading library…
-                    </td>
-                  </tr>
-                )}
-                {songsState === "error" && (
-                  <tr>
-                    <td colSpan={3} role="alert" className="py-10 text-center text-destructive">
-                      Couldn't load the library.{" "}
-                      <button
-                        type="button"
-                        onClick={loadSongs}
-                        className="underline underline-offset-2"
-                      >
-                        Try again
-                      </button>
-                    </td>
-                  </tr>
-                )}
-                {songsState === "ready" && songs.length === 0 && (
-                  <tr>
-                    <td colSpan={3} className="py-10 text-center text-muted-foreground">
-                      Nothing here yet — add your first song above.
-                    </td>
-                  </tr>
-                )}
-                {songsState === "ready" &&
-                  songs.map((s, i) => (
-                    <tr
-                      key={s.id ?? i}
-                      className="hairline-b transition-colors hover:bg-white/[0.03]"
-                    >
-                      <td className="py-3 font-medium text-foreground">{s.title}</td>
-                      <td className="py-3 text-muted-foreground">{s.artist}</td>
-                      <td className="py-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => deleteSong(s)}
-                          disabled={deleting === s.id}
-                          aria-label={`Delete ${s.title}`}
-                          className="inline-flex items-center gap-1 rounded-sm border border-destructive/30 px-3 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40"
-                        >
-                          <Trash2 size={12} aria-hidden="true" />{" "}
-                          {deleting === s.id ? "Deleting…" : "Delete"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
+                <Upload size={16} aria-hidden="true" /> {submitting ? "Adding…" : "Add song"}
+              </button>
+              {msg && (
+                <div
+                  role={msg.ok ? "status" : "alert"}
+                  className={`text-sm md:col-span-2 ${msg.ok ? "text-signal" : "text-destructive"}`}
+                >
+                  {msg.text}
+                </div>
+              )}
+            </form>
+            <p className="font-signal mt-3 text-xs text-muted-foreground">
+              Fingerprinting runs on upload — larger files take a few seconds.
+            </p>
           </div>
         </section>
 
         <section>
-          <h2 className="font-display hairline-b mb-4 pb-4 text-xl font-semibold text-foreground">
+          <h2 className="font-display mb-4 text-xl font-semibold text-foreground">Library</h2>
+          <div className="panel panel-edge rounded-[var(--radius)]">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="font-signal text-xs text-muted-foreground">
+                  <tr>
+                    <th scope="col" className="px-5 pt-5 pb-3 font-normal">
+                      Title
+                    </th>
+                    <th scope="col" className="px-5 pt-5 pb-3 font-normal">
+                      Artist
+                    </th>
+                    <th className="px-5 pt-5 pb-3">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {songsState === "loading" && (
+                    <tr>
+                      <td
+                        colSpan={3}
+                        role="status"
+                        className="font-signal px-5 py-10 text-center text-sm text-muted-foreground"
+                      >
+                        loading library…
+                      </td>
+                    </tr>
+                  )}
+                  {songsState === "error" && (
+                    <tr>
+                      <td
+                        colSpan={3}
+                        role="alert"
+                        className="px-5 py-10 text-center text-destructive"
+                      >
+                        Couldn't load the library.{" "}
+                        <button
+                          type="button"
+                          onClick={loadSongs}
+                          className="underline underline-offset-2"
+                        >
+                          Try again
+                        </button>
+                      </td>
+                    </tr>
+                  )}
+                  {songsState === "ready" && songs.length === 0 && (
+                    <tr>
+                      <td colSpan={3} className="px-5 py-10 text-center text-muted-foreground">
+                        Nothing here yet — add your first song above.
+                      </td>
+                    </tr>
+                  )}
+                  {songsState === "ready" &&
+                    songs.map((s, i) => (
+                      <tr
+                        key={s.id ?? i}
+                        className="hairline-t transition-colors hover:bg-white/[0.03]"
+                      >
+                        <td className="px-5 py-3 font-medium text-foreground">{s.title}</td>
+                        <td className="px-5 py-3 text-muted-foreground">{s.artist}</td>
+                        <td className="px-5 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => deleteSong(s)}
+                            disabled={deleting === s.id}
+                            aria-label={`Delete ${s.title}`}
+                            className="inline-flex items-center gap-1 rounded-lg border border-destructive/30 px-3 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40"
+                          >
+                            <Trash2 size={12} aria-hidden="true" />{" "}
+                            {deleting === s.id ? "Deleting…" : "Delete"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="font-display mb-4 text-xl font-semibold text-foreground">
             Recent identifications{" "}
             <span className="text-sm font-normal text-muted-foreground">(this device)</span>
           </h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="hairline-b font-signal text-xs text-muted-foreground">
-                <tr>
-                  <th scope="col" className="py-3 pr-4 font-normal">
-                    Title
-                  </th>
-                  <th scope="col" className="py-3 pr-4 font-normal">
-                    Artist
-                  </th>
-                  <th scope="col" className="py-3 pr-4 font-normal">
-                    Confidence
-                  </th>
-                  <th scope="col" className="py-3 pr-4 font-normal">
-                    Time
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.length === 0 && (
+          <div className="panel panel-edge rounded-[var(--radius)]">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="font-signal text-xs text-muted-foreground">
                   <tr>
-                    <td colSpan={4} className="py-10 text-center text-muted-foreground">
-                      No identifications recorded yet.
-                    </td>
+                    <th scope="col" className="px-5 pt-5 pb-3 font-normal">
+                      Title
+                    </th>
+                    <th scope="col" className="px-5 pt-5 pb-3 font-normal">
+                      Artist
+                    </th>
+                    <th scope="col" className="px-5 pt-5 pb-3 font-normal">
+                      Confidence
+                    </th>
+                    <th scope="col" className="px-5 pt-5 pb-3 font-normal">
+                      Time
+                    </th>
                   </tr>
-                )}
-                {history.slice(0, 20).map((h, i) => (
-                  <tr key={i} className="hairline-b transition-colors hover:bg-white/[0.03]">
-                    <td className="py-3 font-medium text-foreground">{h.title}</td>
-                    <td className="py-3 text-muted-foreground">{h.artist}</td>
-                    <td className="font-signal py-3 text-signal">
-                      {(h.confidence * 100).toFixed(0)}%
-                    </td>
-                    <td className="font-signal py-3 text-xs text-muted-foreground">
-                      {new Date(h.at).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {history.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="px-5 py-10 text-center text-muted-foreground">
+                        No identifications recorded yet.
+                      </td>
+                    </tr>
+                  )}
+                  {history.slice(0, 20).map((h, i) => (
+                    <tr key={i} className="hairline-t transition-colors hover:bg-white/[0.03]">
+                      <td className="px-5 py-3 font-medium text-foreground">{h.title}</td>
+                      <td className="px-5 py-3 text-muted-foreground">{h.artist}</td>
+                      <td className="font-signal px-5 py-3 text-signal">
+                        {(h.confidence * 100).toFixed(0)}%
+                      </td>
+                      <td className="font-signal whitespace-nowrap px-5 py-3 text-xs text-muted-foreground">
+                        {new Date(h.at).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </section>
       </div>
@@ -387,12 +400,14 @@ function StatCard({
   value: number | string;
 }) {
   return (
-    <div className="px-6 py-2 first:pl-0 sm:px-8">
+    <div className="panel panel-edge rounded-[var(--radius)] p-5">
       <div className="flex items-center gap-2 text-muted-foreground">
-        {icon}
+        <span className="text-accent-2">{icon}</span>
         <span className="text-sm">{label}</span>
       </div>
-      <div className="font-signal mt-2 text-4xl font-medium text-signal">{value}</div>
+      <div className="font-display mt-2 text-4xl font-bold tabular-nums text-foreground">
+        {value}
+      </div>
     </div>
   );
 }

@@ -327,7 +327,7 @@ export function AuthModal({ mode, onClose, onAuth, onSwitchMode }: AuthModalProp
     <AnimatePresence>
       {mode && (
         <motion.div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(5_3_10/0.78)] p-4 backdrop-blur-sm"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -338,7 +338,7 @@ export function AuthModal({ mode, onClose, onAuth, onSwitchMode }: AuthModalProp
             role="dialog"
             aria-modal="true"
             aria-labelledby={`${id}-title`}
-            className="panel w-full max-w-md rounded-md p-8"
+            className="panel panel-edge glow-violet w-full max-w-md rounded-2xl p-6 sm:p-8"
             initial={{ y: 8 }}
             animate={{ y: 0 }}
             exit={{ y: 8 }}
@@ -355,7 +355,7 @@ export function AuthModal({ mode, onClose, onAuth, onSwitchMode }: AuthModalProp
                 type="button"
                 onClick={onClose}
                 aria-label="Close"
-                className="text-muted-foreground hover:text-foreground"
+                className="rounded-lg p-1 text-muted-foreground transition-colors hover:bg-white/[0.05] hover:text-foreground"
               >
                 <X size={20} aria-hidden="true" />
               </button>
@@ -369,7 +369,7 @@ export function AuthModal({ mode, onClose, onAuth, onSwitchMode }: AuthModalProp
                   placeholder="Username"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full rounded-sm border border-border bg-transparent px-4 py-3 text-foreground placeholder:text-muted-foreground focus:border-[var(--accent)] focus:outline-none"
+                  className="field w-full px-4 py-3"
                 />
               )}
               <div className="relative">
@@ -385,7 +385,7 @@ export function AuthModal({ mode, onClose, onAuth, onSwitchMode }: AuthModalProp
                   placeholder="Email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full rounded-sm border border-border bg-transparent pl-11 pr-4 py-3 text-foreground placeholder:text-muted-foreground focus:border-[var(--accent)] focus:outline-none"
+                  className="field w-full py-3 pl-11 pr-4"
                 />
               </div>
               <div className="relative">
@@ -401,13 +401,13 @@ export function AuthModal({ mode, onClose, onAuth, onSwitchMode }: AuthModalProp
                   placeholder="Password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full rounded-sm border border-border bg-transparent pl-11 pr-4 py-3 text-foreground placeholder:text-muted-foreground focus:border-[var(--accent)] focus:outline-none"
+                  className="field w-full py-3 pl-11 pr-4"
                 />
               </div>
               {error && (
                 <div
                   role="alert"
-                  className="rounded-sm border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive"
+                  className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive"
                 >
                   {error}
                 </div>
@@ -415,16 +415,12 @@ export function AuthModal({ mode, onClose, onAuth, onSwitchMode }: AuthModalProp
               {notice && (
                 <div
                   role="status"
-                  className="rounded-sm border border-[var(--accent)]/30 px-4 py-2 text-sm text-foreground"
+                  className="rounded-xl border border-[rgb(192_132_252/0.3)] bg-[rgb(168_85_247/0.08)] px-4 py-2 text-sm text-foreground"
                 >
                   {notice}
                 </div>
               )}
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full rounded-sm bg-foreground py-3 font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-50"
-              >
+              <button type="submit" disabled={loading} className="btn-primary w-full py-3">
                 {loading ? "Please wait…" : mode === "signin" ? "Sign In" : "Create Account"}
               </button>
             </form>
@@ -432,7 +428,7 @@ export function AuthModal({ mode, onClose, onAuth, onSwitchMode }: AuthModalProp
               {mode === "signin" ? "No account? " : "Already have one? "}
               <button
                 type="button"
-                className="text-foreground underline underline-offset-2 hover:text-signal"
+                className="text-accent-2 underline underline-offset-2 hover:text-foreground"
                 onClick={() => onSwitchMode?.(mode === "signin" ? "signup" : "signin")}
               >
                 {mode === "signin" ? "Sign up free" : "Sign in"}
@@ -461,7 +457,7 @@ export function LimitModal({
     <AnimatePresence>
       {open && (
         <motion.div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(5_3_10/0.78)] p-4 backdrop-blur-sm"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -471,14 +467,14 @@ export function LimitModal({
             role="dialog"
             aria-modal="true"
             aria-labelledby={`${id}-title`}
-            className="panel w-full max-w-md rounded-md p-8 text-center"
+            className="panel panel-edge glow-violet w-full max-w-md rounded-2xl p-6 text-center sm:p-8"
             initial={{ y: 8 }}
             animate={{ y: 0 }}
             exit={{ y: 8 }}
           >
             <div
               aria-hidden="true"
-              className="font-signal mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-border text-signal"
+              className="bg-gradient-button glow-pink font-signal mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl text-sm font-semibold text-white"
             >
               2/2
             </div>
@@ -492,17 +488,10 @@ export function LimitModal({
               Sign up free for unlimited song identifications.
             </p>
             <div className="flex gap-3">
-              <button
-                onClick={onClose}
-                className="flex-1 rounded-sm border border-border py-3 text-foreground hover:bg-white/[0.04]"
-              >
+              <button onClick={onClose} className="btn-secondary flex-1 py-3">
                 Maybe later
               </button>
-              <button
-                data-autofocus
-                onClick={onSignup}
-                className="flex-1 rounded-sm bg-foreground py-3 font-semibold text-background hover:opacity-90"
-              >
+              <button data-autofocus onClick={onSignup} className="btn-primary flex-1 py-3">
                 Sign up free
               </button>
             </div>

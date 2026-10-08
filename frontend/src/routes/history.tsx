@@ -45,7 +45,13 @@ function HistoryPage() {
   return (
     <PageShell>
       <div className="mx-auto max-w-4xl">
-        <h1 className="font-display mb-2 text-4xl font-semibold text-foreground">Your history</h1>
+        <span className="inline-flex items-center gap-2 rounded-full border border-[rgb(192_132_252/0.25)] bg-[rgb(168_85_247/0.1)] px-3 py-1 text-xs text-accent-2">
+          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--accent-2)]" />
+          Identifications
+        </span>
+        <h1 className="font-display mt-4 mb-2 text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
+          Your <span className="text-gradient">history</span>
+        </h1>
         <p className="hairline-b mb-8 pb-8 text-muted-foreground">
           {source === "account"
             ? "Every song you've identified, synced to your account."
@@ -57,7 +63,7 @@ function HistoryPage() {
         {syncFailed && (
           <p
             role="alert"
-            className="mb-6 rounded-sm border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive"
+            className="mb-6 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive"
           >
             Couldn't load your synced history, so this shows what's saved on this device.
           </p>
@@ -68,48 +74,45 @@ function HistoryPage() {
             loading history…
           </p>
         ) : items.length === 0 ? (
-          <div className="panel rounded-md p-12 text-center">
-            <AudioWaveform
-              size={20}
-              aria-hidden="true"
-              className="mx-auto mb-4 text-muted-foreground"
-            />
+          <div className="panel panel-edge rounded-[var(--radius)] p-12 text-center">
+            <AudioWaveform size={20} aria-hidden="true" className="mx-auto mb-4 text-accent-2" />
             <div className="text-foreground">You haven't identified anything yet.</div>
-            <Link
-              to="/"
-              className="mt-4 inline-block rounded-full bg-foreground px-5 py-2 text-sm font-semibold text-background hover:opacity-90"
-            >
+            <Link to="/" className="btn-primary mt-5 px-5 py-2.5 text-sm">
               Identify a song
             </Link>
           </div>
         ) : (
-          <table className="w-full text-left text-sm">
-            <caption className="sr-only">Songs you've identified, newest first</caption>
-            <thead className="hairline-b font-signal text-xs text-muted-foreground">
-              <tr>
-                <th scope="col" className="py-3 pr-4 font-normal">
-                  Title
-                </th>
-                <th scope="col" className="py-3 pr-4 font-normal">
-                  Artist
-                </th>
-                <th scope="col" className="py-3 pr-4 font-normal">
-                  Identified
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((it, i) => (
-                <tr key={i} className="hairline-b transition-colors hover:bg-white/[0.03]">
-                  <td className="py-4 pr-4 font-medium text-foreground">{it.title}</td>
-                  <td className="py-4 pr-4 text-muted-foreground">{it.artist}</td>
-                  <td className="font-signal py-4 text-xs text-muted-foreground">
-                    {new Date(it.at).toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="panel panel-edge rounded-[var(--radius)]">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <caption className="sr-only">Songs you've identified, newest first</caption>
+                <thead className="font-signal text-xs text-muted-foreground">
+                  <tr>
+                    <th scope="col" className="px-5 pt-5 pb-3 font-normal">
+                      Title
+                    </th>
+                    <th scope="col" className="px-5 pt-5 pb-3 font-normal">
+                      Artist
+                    </th>
+                    <th scope="col" className="px-5 pt-5 pb-3 font-normal">
+                      Identified
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((it, i) => (
+                    <tr key={i} className="hairline-t transition-colors hover:bg-white/[0.03]">
+                      <td className="px-5 py-4 font-medium text-foreground">{it.title}</td>
+                      <td className="px-5 py-4 text-muted-foreground">{it.artist}</td>
+                      <td className="font-signal whitespace-nowrap px-5 py-4 text-xs text-muted-foreground">
+                        {new Date(it.at).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
       </div>
     </PageShell>

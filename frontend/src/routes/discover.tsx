@@ -35,7 +35,13 @@ function DiscoverPage() {
 
   return (
     <PageShell>
-      <h1 className="font-display mb-2 text-4xl font-semibold text-foreground">Discover</h1>
+      <span className="inline-flex items-center gap-2 rounded-full border border-[rgb(192_132_252/0.25)] bg-[rgb(168_85_247/0.1)] px-3 py-1 text-xs text-accent-2">
+        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--accent-2)]" />
+        Library
+      </span>
+      <h1 className="font-display mt-4 mb-2 text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
+        <span className="text-gradient">Discover</span>
+      </h1>
       <p className="hairline-b mb-8 pb-8 text-muted-foreground">
         Everything WaveJack can currently recognize.
       </p>
@@ -45,23 +51,19 @@ function DiscoverPage() {
           loading library…
         </p>
       ) : offline ? (
-        <div role="alert" className="panel rounded-md p-10 text-center">
-          <Compass size={20} aria-hidden="true" className="mx-auto mb-3 text-muted-foreground" />
+        <div role="alert" className="panel panel-edge rounded-[var(--radius)] p-10 text-center">
+          <Compass size={20} aria-hidden="true" className="mx-auto mb-3 text-accent-2" />
           <div className="text-foreground">Can't reach the WaveJack API right now.</div>
           <div className="font-signal mt-1 break-all text-xs text-muted-foreground">
             Check that the backend is running at {API_URL}.
           </div>
-          <button
-            type="button"
-            onClick={load}
-            className="mt-5 rounded-full border border-border px-5 py-2 text-sm text-foreground transition-colors hover:bg-white/[0.04]"
-          >
+          <button type="button" onClick={load} className="btn-secondary mt-5 px-5 py-2 text-sm">
             Try again
           </button>
         </div>
       ) : songs.length === 0 ? (
-        <div className="panel rounded-md p-10 text-center">
-          <Music size={20} aria-hidden="true" className="mx-auto mb-3 text-muted-foreground" />
+        <div className="panel panel-edge rounded-[var(--radius)] p-10 text-center">
+          <Music size={20} aria-hidden="true" className="mx-auto mb-3 text-accent-2" />
           <div className="text-foreground">No songs in the library yet.</div>
           <div className="mt-1 text-sm text-muted-foreground">
             Add one from the admin panel to start building it out.
@@ -70,19 +72,20 @@ function DiscoverPage() {
       ) : (
         <ul
           aria-label={`${songs.length} songs in the library`}
-          className="grid grid-cols-2 gap-px sm:grid-cols-3 lg:grid-cols-4"
-          style={{ background: "var(--border)" }}
+          className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4"
         >
           {songs.map((s, i) => (
             <li
               key={s.id ?? i}
-              className="group min-w-0 bg-background p-5 transition-colors hover:bg-white/[0.03]"
+              className="panel group min-w-0 rounded-[var(--radius)] p-4 transition-colors hover:border-[var(--border-strong)] sm:p-5"
             >
               <div
                 aria-hidden="true"
-                className="mb-8 flex h-10 w-10 items-center justify-center rounded-full border border-border"
+                className="bg-gradient-icon mb-6 flex h-10 w-10 items-center justify-center rounded-xl p-px"
               >
-                <Music size={16} className="text-signal" />
+                <span className="flex h-full w-full items-center justify-center rounded-[11px] bg-[var(--card)]">
+                  <Music size={16} className="text-accent-2" />
+                </span>
               </div>
               <div className="truncate font-medium text-foreground">{s.title}</div>
               <div className="truncate text-sm text-muted-foreground">{s.artist}</div>

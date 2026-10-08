@@ -195,6 +195,60 @@
   .text-success {
     color: var(--success);
   }
+  /* Primary action: brand button gradient with a pink glow (white text >= 4.6:1). */
+  .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 0.75rem;
+    background: var(--gradient-button);
+    box-shadow: var(--glow-pink);
+    color: #fff;
+    font-weight: 600;
+    transition: filter 0.15s ease;
+  }
+  .btn-primary:hover:not(:disabled) {
+    filter: brightness(1.1);
+  }
+  /* Secondary action: dark card surface with a stronger hairline. */
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--border-strong);
+    background: var(--card);
+    color: var(--foreground);
+    transition: background-color 0.15s ease;
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--secondary);
+  }
+  .btn-primary:disabled,
+  .btn-secondary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  /* Text inputs: faint fill, violet focus ring. Placeholder (muted) is 6.5:1 on the fill. */
+  .field {
+    border-radius: 0.75rem;
+    border: 1px solid var(--border-strong);
+    background: var(--input);
+    color: var(--foreground);
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+  .field::placeholder {
+    color: var(--muted-foreground);
+  }
+  .field:focus {
+    outline: none;
+    border-color: var(--accent-2);
+    box-shadow: 0 0 0 3px rgb(192 132 252 / 0.2);
+  }
   .hairline-t {
     border-top: 1px solid var(--border);
   }
