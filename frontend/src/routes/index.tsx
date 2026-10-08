@@ -1,8 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload, LogOut, AlertCircle } from "lucide-react";
-import { MicOrb, LiveWaveform, WaveformFingerprint } from "@/components/wavejack/Visuals";
+import { Upload, LogOut, AlertCircle, Mic } from "lucide-react";
+import { MicOrb, LiveWaveform } from "@/components/wavejack/Visuals";
+import { StatsRow, useLibraryStats } from "@/components/wavejack/LibraryStats";
 import { PageShell } from "@/components/wavejack/PageShell";
 import { API_URL, WS_URL } from "@/lib/config";
 import {
@@ -16,6 +17,7 @@ import {
   addHistoryDB,
 } from "@/components/wavejack/Auth";
 import { RecentSearches, artFor, type Track } from "@/components/wavejack/RecentSearches";
+import { ResultCard } from "@/components/wavejack/ResultCard";
 import { MicDebugPanel, type MicDebugSent } from "@/components/wavejack/MicDebugPanel";
 import {
   MicPicker,
@@ -52,6 +54,7 @@ type IdentifyResponse = {
   artist: string;
   confidence: number;
   song_id?: number;
+  youtube_url?: string | null; // sent by both /identify and the WebSocket result
 };
 
 const PIPELINE_STEPS = [
@@ -96,6 +99,7 @@ function WaveJack() {
   // Microphone choice ("" = system default), saved in localStorage.
   const [micId, setMicId] = useState("");
   const { devices: micDevices, refresh: refreshMics } = useAudioInputs();
+  const libraryStats = useLibraryStats();
   const [silentMsg, setSilentMsg] = useState<string | null>(null);
   const silenceCheckRef = useRef<{
     ctx: AudioContext;
@@ -509,7 +513,7 @@ function WaveJack() {
             <span className="text-sm text-foreground">Hi, {user.name}</span>
             <button
               onClick={logout}
-              className="flex items-center gap-1.5 rounded-full border border-border px-4 py-1.5 text-sm text-foreground transition-colors hover:bg-white/[0.04]"
+              className="flex items-center gap-1.5 rounded-lg border border-border px-4 py-1.5 text-sm text-foreground transition-colors hover:bg-white/[0.04]"
             >
               <LogOut size={14} aria-hidden="true" /> Logout
             </button>
@@ -521,13 +525,13 @@ function WaveJack() {
             </span>
             <button
               onClick={() => setAuthMode("signin")}
-              className="rounded-full border border-border px-5 py-1.5 text-sm text-foreground transition-colors hover:bg-white/[0.04]"
+              className="rounded-lg border border-border px-4 py-1.5 text-sm text-foreground transition-colors hover:bg-white/[0.04]"
             >
               Sign In
             </button>
             <button
               onClick={() => setAuthMode("signup")}
-              className="rounded-full bg-foreground px-5 py-1.5 text-sm font-semibold text-background transition-opacity hover:opacity-90"
+              className="bg-gradient-button rounded-lg px-4 py-1.5 text-sm font-semibold text-white transition-[filter] hover:brightness-110"
             >
               Sign Up
             </button>
@@ -535,16 +539,23 @@ function WaveJack() {
         )
       }
     >
-      {/* Hero — asymmetric two columns: copy + status on the left, the
-         interactive orb on the right, echoing the waveform-into-fingerprint
-         mark used in the nav. */}
-      <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-16 px-6 pt-16 pb-10 sm:px-10 lg:grid-cols-2 lg:pt-24">
+      {/* Hero: copy, status, actions and library stats on the left; the
+         interactive orb on the right. */}
+      <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-12 px-4 pt-12 pb-10 sm:px-6 lg:grid-cols-[1.05fr_1fr] lg:gap-8 lg:pt-20">
         <div>
-          <h1 className="font-display text-6xl font-semibold leading-[1.05] text-foreground sm:text-7xl">
-            Identify
+          <span className="inline-flex items-center gap-2 rounded-full border border-[rgb(192_132_252/0.25)] bg-[rgb(168_85_247/0.1)] px-3 py-1 text-xs text-accent-2">
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--accent-2)]" />
+            Acoustic fingerprinting
+          </span>
+          <h1 className="font-display mt-6 text-5xl font-bold leading-[1.02] tracking-tight text-foreground sm:text-7xl">
+            Identify Any Song
             <br />
-            Any Song
+            <span className="text-gradient">In Seconds.</span>
           </h1>
+          <p className="mt-5 max-w-md text-base leading-relaxed text-muted-foreground">
+            Hold your phone up to the music or drop in a clip. WaveJack turns it into a fingerprint
+            and matches it against every song in the library.
+          </p>
 
           {/* Screen readers get one short announcement per state change; the
              animated text below changes too often (countdown, pipeline steps). */}
@@ -552,7 +563,7 @@ function WaveJack() {
             {statusAnnouncement}
           </p>
 
-          <div className="hairline-t mt-8 max-w-sm pt-5" aria-hidden="true">
+          <div className="mt-6 min-h-6 max-w-sm" aria-hidden="true">
             <AnimatePresence mode="wait">
               {state === "idle" && (
                 <motion.div
@@ -608,24 +619,10 @@ function WaveJack() {
                   </div>
                 </motion.div>
               )}
-              {state === "result" && result && (
-                <motion.div
-                  key="result"
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                >
-                  <div className="font-signal text-sm text-signal">
-                    matched · {Math.round(result.confidence * 100)}% confidence
-                  </div>
-                  <div className="font-display mt-2 text-2xl font-semibold text-foreground">
-                    {result.title}
-                  </div>
-                  <div className="text-base text-muted-foreground">{result.artist}</div>
-                </motion.div>
-              )}
             </AnimatePresence>
           </div>
+          {/* The result card has buttons, so it lives outside the aria-hidden status block. */}
+          {state === "result" && result && <ResultCard result={result} />}
           {/* Part of the status area, but outside the aria-hidden block so it's announced. */}
           {silentMsg && (
             <p
@@ -637,18 +634,19 @@ function WaveJack() {
             </p>
           )}
 
-          <div className="hairline-t mt-6 flex flex-wrap items-center gap-4 pt-6">
+          <div className="mt-6 flex flex-wrap items-center gap-3">
             <button
               onClick={handleOrbClick}
-              className="rounded-full bg-foreground px-6 py-3 text-sm font-semibold text-background transition-opacity hover:opacity-90"
+              className="bg-gradient-button glow-pink inline-flex items-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold text-white transition-[filter] hover:brightness-110"
             >
+              <Mic size={16} aria-hidden="true" />
               {state === "listening" ? "Stop Listening" : "Start Listening"}
             </button>
             <button
               onClick={() => fileRef.current?.click()}
-              className="flex items-center gap-2 rounded-full border border-border px-6 py-3 text-sm text-foreground transition-colors hover:bg-white/[0.04]"
+              className="inline-flex items-center gap-2 rounded-xl border border-[var(--border-strong)] bg-[var(--card)] px-6 py-3 text-sm text-foreground transition-colors hover:bg-[var(--secondary)]"
             >
-              <Upload size={15} /> Upload audio
+              <Upload size={15} aria-hidden="true" /> Upload audio
             </button>
             <input
               ref={fileRef}
@@ -664,11 +662,12 @@ function WaveJack() {
               }}
             />
           </div>
+
+          <StatsRow stats={libraryStats} />
         </div>
 
         {/* Right column: the mic orb doubles as the click target and the
-           hero visual — no separate decorative illustration competing with
-           it for attention. Hidden from assistive tech: the Start Listening
+           hero visual. Hidden from assistive tech: the Start Listening
            and Upload buttons are the keyboard/screen-reader equivalents. */}
         <div className="flex flex-col items-center">
           <div
@@ -708,24 +707,99 @@ function WaveJack() {
       </div>
 
       {DEV && (
-        <div className="px-6 sm:px-10">
+        <div className="mx-auto max-w-6xl px-4 sm:px-6">
           <MicDebugPanel stream={debugStream} sent={debugSent} recordingUrl={debugUrl} />
         </div>
       )}
 
-      {/* The waveform → fingerprint mark, used once here as a section divider
-         rather than a repeated decoration. */}
-      <div className="mx-auto max-w-6xl px-6 py-4 opacity-70 sm:px-10">
-        <WaveformFingerprint className="h-16 w-full" />
-      </div>
-
-      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 px-6 pb-24 pt-6 sm:px-10 lg:grid-cols-[1fr_auto]">
+      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-5 px-4 pb-8 pt-6 sm:px-6 md:grid-cols-2 lg:grid-cols-3">
         <RecentSearches tracks={tracks} />
-        <div className="panel w-full rounded-md p-5 lg:w-[380px]" aria-hidden="true">
-          <div className="font-signal mb-1 text-xs text-muted-foreground">live waveform</div>
+        <div className="panel panel-edge rounded-[var(--radius)] p-5" aria-hidden="true">
+          <div className="mb-4 flex items-center justify-between">
+            <span className="font-display text-base font-semibold text-foreground">
+              Live waveform
+            </span>
+            <span className="font-signal text-xs text-muted-foreground">
+              {state === "listening" ? "recording" : "idle"}
+            </span>
+          </div>
           <LiveWaveform active={state === "listening"} />
         </div>
+        <section
+          aria-labelledby="system-status"
+          className="panel panel-edge rounded-[var(--radius)] p-5 md:col-span-2 lg:col-span-1"
+        >
+          <h2
+            id="system-status"
+            className="font-display mb-4 text-base font-semibold text-foreground"
+          >
+            System status
+          </h2>
+          <dl className="space-y-3 text-sm">
+            {[
+              {
+                label: "Recognition API",
+                value:
+                  libraryStats.status === "ok"
+                    ? "online"
+                    : libraryStats.status === "loading"
+                      ? "checking…"
+                      : "unreachable",
+                tone:
+                  libraryStats.status === "ok"
+                    ? "bg-[var(--success)]"
+                    : libraryStats.status === "loading"
+                      ? "bg-[var(--accent-3)]"
+                      : "bg-[var(--destructive)]",
+              },
+              {
+                label: "Microphone",
+                value: micDevices.find((d) => d.deviceId === micId)?.label || "system default",
+                tone: "bg-[var(--accent-2)]",
+              },
+              {
+                label: "Recognizer",
+                value:
+                  state === "listening"
+                    ? "listening"
+                    : state === "processing"
+                      ? "matching"
+                      : state === "result"
+                        ? "matched"
+                        : state === "error"
+                          ? "failed"
+                          : "ready",
+                tone: state === "error" ? "bg-[var(--destructive)]" : "bg-[var(--accent)]",
+              },
+            ].map((row) => (
+              <div key={row.label} className="flex items-center justify-between gap-4">
+                <dt className="shrink-0 text-muted-foreground">{row.label}</dt>
+                <dd className="flex min-w-0 items-center gap-2 text-foreground">
+                  <span
+                    aria-hidden="true"
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${row.tone}`}
+                  />
+                  <span className="truncate">{row.value}</span>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
       </div>
+
+      {/* Footer: the real fingerprinting parameters the backend uses. */}
+      <footer className="mx-auto max-w-6xl px-4 pb-10 sm:px-6">
+        <div className="font-signal flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-[var(--border)] bg-[rgb(20_16_29/0.6)] px-4 py-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-2 text-foreground">
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--success)]" />
+            WaveJack
+          </span>
+          <span>22,050 Hz mono</span>
+          <span>STFT 2048 / hop 512</span>
+          <span>SHA-1 pair hashes</span>
+          <span>time-offset voting</span>
+        </div>
+      </footer>
 
       <AuthModal
         mode={authMode}

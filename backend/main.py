@@ -360,6 +360,33 @@ def list_songs():
 
 
 # ─────────────────────────────────────────────
+# GET /stats — public library size for the landing page (read-only, no auth)
+# Returns only two numbers. Cached for a minute so page loads don't make
+# Supabase count the fingerprints table every time.
+# ─────────────────────────────────────────────
+
+_STATS_TTL_SECONDS = 60
+_stats_cache: dict = {"at": 0.0, "value": None}
+
+
+@app.get("/stats")
+def public_stats():
+    now = time.monotonic()
+    if _stats_cache["value"] is not None and now - _stats_cache["at"] < _STATS_TTL_SECONDS:
+        return _stats_cache["value"]
+    try:
+        client = get_client()
+        songs = client.table("songs").select("id", count="exact").limit(1).execute().count or 0
+        fingerprints = client.table("fingerprints").select("id", count="exact").limit(1).execute().count or 0
+    except Exception as e:
+        print(f"stats: count failed: {type(e).__name__}: {e}")
+        raise HTTPException(503, "Library stats are unavailable right now.") from e
+    value = {"songs": songs, "fingerprints": fingerprints}
+    _stats_cache.update(at=now, value=value)
+    return value
+
+
+# ─────────────────────────────────────────────
 # HEALTH CHECK
 # ─────────────────────────────────────────────
 

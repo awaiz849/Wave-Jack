@@ -33,30 +33,64 @@
 }
 
 :root {
-  --radius: 0.375rem;
+  --radius: 0.875rem;
 
-  /* Dark minimal: true near-black, off-white ink, a single electric-blue
-     accent. No gradients, no glass, no glow — hairline rules do the work
-     that blur/shadow used to. */
-  --background: oklch(0.09 0.004 260);
-  --foreground: oklch(0.96 0.003 90);
-  --card: oklch(0.09 0.004 260);
-  --card-foreground: oklch(0.96 0.003 90);
-  --popover: oklch(0.11 0.005 260);
-  --popover-foreground: oklch(0.96 0.003 90);
-  --primary: oklch(0.96 0.003 90);
-  --primary-foreground: oklch(0.09 0.004 260);
-  --secondary: oklch(0.16 0.006 260);
-  --secondary-foreground: oklch(0.96 0.003 90);
-  --muted: oklch(0.14 0.005 260);
-  --muted-foreground: oklch(0.63 0.01 260);
-  --accent: oklch(0.6 0.21 264);
-  --accent-foreground: oklch(0.98 0.005 264);
-  --destructive: oklch(0.62 0.2 25);
-  --destructive-foreground: oklch(0.98 0.01 25);
-  --border: oklch(1 0 0 / 0.12);
-  --input: oklch(1 0 0 / 0.08);
-  --ring: oklch(0.6 0.21 264);
+  /* "Aurora": deep violet-black, soft ambient glows, and a violet → pink →
+     amber brand gradient. Contrast (WCAG): every text colour below is
+     >= 6.9:1 on both --background and --card. */
+  --background: #0b0812;
+  --foreground: #f6f3fb;
+  --card: #14101d;
+  --card-foreground: #f6f3fb;
+  --popover: #181325;
+  --popover-foreground: #f6f3fb;
+  --primary: #f6f3fb;
+  --primary-foreground: #0b0812;
+  --secondary: #1b1626;
+  --secondary-foreground: #f6f3fb;
+  --muted: #1b1626;
+  --muted-foreground: #a9a3bb; /* 8.2:1 on background */
+  --accent: #f472b6; /* pink — labels, focus ring, links (7.5:1) */
+  --accent-foreground: #0b0812;
+  --accent-2: #c084fc; /* violet (7.5:1) */
+  --accent-3: #fbbf24; /* amber (11.9:1) */
+  --success: #34d399; /* status dots (10.3:1) */
+  --destructive: #fb7185; /* (7.4:1) */
+  --destructive-foreground: #0b0812;
+  --border: rgb(255 255 255 / 0.08);
+  --border-strong: rgb(255 255 255 / 0.14);
+  --input: rgb(255 255 255 / 0.06);
+  --ring: #c084fc;
+
+  /* Gradients */
+  --gradient-brand: linear-gradient(
+    90deg,
+    #a855f7 0%,
+    #ec4899 55%,
+    #f59e0b 100%
+  ); /* headline, card top edge */
+  --gradient-button: linear-gradient(
+    90deg,
+    #9333ea 0%,
+    #c026d3 50%,
+    #db2777 100%
+  ); /* white text >= 4.6:1 */
+  --gradient-icon: linear-gradient(135deg, #a855f7, #ec4899);
+
+  /* Glows and elevation */
+  --glow-violet: 0 0 48px -8px rgb(168 85 247 / 0.45);
+  --glow-pink: 0 0 40px -6px rgb(236 72 153 / 0.45);
+  --glow-amber: 0 0 40px -10px rgb(245 158 11 / 0.35);
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 24px 48px -28px rgb(0 0 0 / 0.9);
+
+  /* Page backdrop: violet bloom top-right, magenta/amber bloom bottom-right, faint grid. */
+  --backdrop-glow:
+    radial-gradient(60rem 40rem at 85% -10%, rgb(124 58 237 / 0.22), transparent 60%),
+    radial-gradient(50rem 36rem at 100% 85%, rgb(219 39 119 / 0.18), transparent 60%),
+    radial-gradient(40rem 30rem at 70% 110%, rgb(245 158 11 / 0.1), transparent 60%);
+  --backdrop-grid:
+    linear-gradient(rgb(255 255 255 / 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 0.025) 1px, transparent 1px);
 }
 
 @layer base {
@@ -90,12 +124,76 @@
   }
 }
 
+/* Respect "reduce motion" for CSS animations/transitions too
+   (Framer Motion already follows it via <MotionConfig reducedMotion="user">). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 @layer utilities {
-  /* Flat panel with a hairline border — the only "surface" in this system.
-     No blur, no translucency, no elevation shadow. */
+  /* Card surface: dark violet panel, hairline border, soft depth. */
   .panel {
     background: var(--card);
     border: 1px solid var(--border);
+    box-shadow: var(--shadow-card);
+  }
+  /* Thin brand-gradient line along a card's top edge (as in the reference cards). */
+  .panel-edge {
+    position: relative;
+    overflow: hidden;
+  }
+  .panel-edge::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 2px;
+    background: var(--gradient-brand);
+    opacity: 0.9;
+  }
+  .page-backdrop {
+    background-color: var(--background);
+    background-image: var(--backdrop-glow), var(--backdrop-grid);
+    background-size:
+      auto,
+      auto,
+      auto,
+      48px 48px,
+      48px 48px;
+    background-attachment: fixed;
+  }
+  .text-gradient {
+    background: var(--gradient-brand);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .bg-gradient-button {
+    background: var(--gradient-button);
+  }
+  .bg-gradient-icon {
+    background: var(--gradient-icon);
+  }
+  .glow-violet {
+    box-shadow: var(--glow-violet);
+  }
+  .glow-pink {
+    box-shadow: var(--glow-pink);
+  }
+  .text-accent-2 {
+    color: var(--accent-2);
+  }
+  .text-accent-3 {
+    color: var(--accent-3);
+  }
+  .text-success {
+    color: var(--success);
   }
   .hairline-t {
     border-top: 1px solid var(--border);

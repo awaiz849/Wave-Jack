@@ -22,4 +22,4 @@ Shazam-style audio fingerprinting app (college project, portfolio piece).
 - Do not change the fingerprinting algorithm parameters without telling me why.
 - Never commit .env files or keys.
 - After each task: run build/tests, summarize what changed, suggest a commit message.
-- Design system: dark minimal, hairline borders, one blue accent, fonts Space Grotesk / Inter / JetBrains Mono. Don't reintroduce gradients/glass.
+- Design system: "Aurora" — deep violet-black background with ambient violet/magenta/amber glows and a faint grid, violet → pink → amber brand gradient (headline word, card top edges, primary button), soft glows on the orb and primary actions, rounded cards (14 px) with hairline borders. All tokens and utilities live in frontend/src/styles.css (`--gradient-*`, `--glow-*`, `--backdrop-*`, `.panel`, `.panel-edge`, `.page-backdrop`, `.text-gradient`); use them rather than ad-hoc colours. Fonts Space Grotesk / Inter / JetBrains Mono. Body text must pass WCAG AA; respect prefers-reduced-motion. Show only real WaveJack data — no invented stats or sample content.

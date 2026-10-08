@@ -77,7 +77,7 @@ export function MicPicker({
         value={shown}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        className="max-w-[240px] truncate rounded-sm border border-border bg-transparent px-2 py-1 text-foreground transition-colors focus:border-[var(--accent)] focus:outline-none disabled:opacity-50"
+        className="max-w-[240px] truncate rounded-lg border border-border bg-[var(--card)] px-2.5 py-1.5 text-foreground transition-colors focus:border-[var(--accent-2)] focus:outline-none disabled:opacity-50"
       >
         <option value="" className="bg-background">
           system default
