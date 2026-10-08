@@ -626,6 +626,16 @@ function WaveJack() {
               )}
             </AnimatePresence>
           </div>
+          {/* Part of the status area, but outside the aria-hidden block so it's announced. */}
+          {silentMsg && (
+            <p
+              role="alert"
+              className="mt-3 flex max-w-sm items-start gap-2 text-sm text-destructive"
+            >
+              <AlertCircle size={15} aria-hidden="true" className="mt-0.5 shrink-0" />
+              {silentMsg}
+            </p>
+          )}
 
           <div className="hairline-t mt-6 flex flex-wrap items-center gap-4 pt-6">
             <button
@@ -694,11 +704,6 @@ function WaveJack() {
             onChange={chooseMic}
             disabled={state === "listening" || state === "processing"}
           />
-          {silentMsg && (
-            <p role="alert" className="mt-2 max-w-xs text-center text-xs text-destructive">
-              {silentMsg}
-            </p>
-          )}
         </div>
       </div>
 
