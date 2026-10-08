@@ -16,6 +16,21 @@ import {
   addHistoryDB,
 } from "@/components/wavejack/Auth";
 import { RecentSearches, artFor, type Track } from "@/components/wavejack/RecentSearches";
+import { MicDebugPanel, type MicDebugSent } from "@/components/wavejack/MicDebugPanel";
+import {
+  MicPicker,
+  loadMicChoice,
+  saveMicChoice,
+  useAudioInputs,
+} from "@/components/wavejack/MicPicker";
+
+// "No sound" check: the loudest level in the first SILENCE_CHECK_MS of a recording
+// must reach SILENCE_DBFS, or we tell the user to pick another microphone.
+const SILENCE_CHECK_MS = 2000;
+const SILENCE_DBFS = -70;
+
+// TEMPORARY: the mic debug panel and playback only exist in `vite dev`, never in a build.
+const DEV = import.meta.env.DEV;
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -73,6 +88,64 @@ function WaveJack() {
   // Mic recording refs
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  // Dev-only mic diagnostics (see MicDebugPanel).
+  const [debugStream, setDebugStream] = useState<MediaStream | null>(null);
+  const [debugSent, setDebugSent] = useState<MicDebugSent>({ chunks: 0, bytes: 0, mimeType: "" });
+  const [debugUrl, setDebugUrl] = useState<string | null>(null);
+  const debugChunksRef = useRef<Blob[]>([]);
+  // Microphone choice ("" = system default), saved in localStorage.
+  const [micId, setMicId] = useState("");
+  const { devices: micDevices, refresh: refreshMics } = useAudioInputs();
+  const [silentMsg, setSilentMsg] = useState<string | null>(null);
+  const silenceCheckRef = useRef<{
+    ctx: AudioContext;
+    timer: ReturnType<typeof setInterval>;
+  } | null>(null);
+
+  useEffect(() => {
+    setMicId(loadMicChoice());
+  }, []);
+
+  const chooseMic = (deviceId: string) => {
+    setMicId(deviceId);
+    saveMicChoice(deviceId);
+  };
+
+  const stopSilenceCheck = () => {
+    if (!silenceCheckRef.current) return;
+    clearInterval(silenceCheckRef.current.timer);
+    silenceCheckRef.current.ctx.close().catch(() => {});
+    silenceCheckRef.current = null;
+  };
+
+  // Samples the input level every 100 ms; if nothing reaches SILENCE_DBFS within
+  // SILENCE_CHECK_MS, the chosen device is almost certainly not hearing anything.
+  const startSilenceCheck = (stream: MediaStream) => {
+    stopSilenceCheck();
+    const label = stream.getAudioTracks()[0]?.label || "this microphone";
+    const ctx = new AudioContext();
+    ctx.resume().catch(() => {});
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    ctx.createMediaStreamSource(stream).connect(analyser); // not routed to the speakers
+    const buf = new Float32Array(analyser.fftSize);
+    const started = performance.now();
+    let loudest = -Infinity;
+    const timer = setInterval(() => {
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      const rms = Math.sqrt(sum / buf.length);
+      loudest = Math.max(loudest, rms > 0 ? 20 * Math.log10(rms) : -Infinity);
+      if (performance.now() - started >= SILENCE_CHECK_MS) {
+        if (loudest < SILENCE_DBFS) {
+          setSilentMsg(`No sound detected from ${label}. Pick another microphone.`);
+        }
+        stopSilenceCheck();
+      }
+    }, 100);
+    silenceCheckRef.current = { ctx, timer };
+  };
   const wsRef = useRef<WebSocket | null>(null);
   const cdTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -138,6 +211,7 @@ function WaveJack() {
     waitingForResultRef.current = false;
     setResult(null);
     setErrorMsg(null);
+    setSilentMsg(null);
 
     if (!navigator.mediaDevices?.getUserMedia) {
       // Browsers only expose the mic on https:// or localhost (not e.g. http://192.168.x.x).
@@ -153,7 +227,22 @@ function WaveJack() {
 
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Browser voice-call processing is on by default and is wrong for music:
+      // echo cancellation removes sound this computer is playing, noise
+      // suppression treats music as noise, and auto-gain pumps the level.
+      const audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: micId ? { ...audio, deviceId: { exact: micId } } : audio,
+        });
+      } catch (err) {
+        // The saved microphone is gone (unplugged, or ids reset): forget it, use the default.
+        const name = err instanceof DOMException ? err.name : "";
+        if (!micId || (name !== "OverconstrainedError" && name !== "NotFoundError")) throw err;
+        chooseMic("");
+        stream = await navigator.mediaDevices.getUserMedia({ audio });
+      }
+      refreshMics(); // labels are only available once access has been granted
     } catch (err) {
       const name = err instanceof DOMException ? err.name : "";
       showError(
@@ -168,6 +257,15 @@ function WaveJack() {
 
     try {
       streamRef.current = stream;
+      if (DEV) {
+        debugChunksRef.current = [];
+        setDebugSent({ chunks: 0, bytes: 0, mimeType: "" });
+        setDebugUrl((old) => {
+          if (old) URL.revokeObjectURL(old);
+          return null;
+        });
+        setDebugStream(stream);
+      }
       const ws = new WebSocket(`${WS_URL}/ws/recognize`);
       wsRef.current = ws;
 
@@ -222,14 +320,29 @@ function WaveJack() {
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
           ws.send(e.data);
+          if (DEV) {
+            debugChunksRef.current.push(e.data); // exactly the bytes the backend receives
+            setDebugSent((s) => ({ ...s, chunks: s.chunks + 1, bytes: s.bytes + e.data.size }));
+          }
         }
       };
+      if (DEV) {
+        setDebugSent((s) => ({ ...s, mimeType: recorder.mimeType }));
+        // onstop fires after the last dataavailable, so the recording is complete here.
+        recorder.onstop = () => {
+          if (debugChunksRef.current.length) {
+            const blob = new Blob(debugChunksRef.current, { type: recorder.mimeType });
+            setDebugUrl(URL.createObjectURL(blob));
+          }
+        };
+      }
 
       // Send audio every second: the backend matches as soon as each piece lands
       // and answers early once the evidence is clear (measured: median 4.3 s vs
       // 5.3 s with 2 s pieces, same accuracy). Recording still stops at 10 s.
       recorder.start(1000);
       setState("listening");
+      startSilenceCheck(stream);
 
       let sec = RECORD_SECONDS;
       setCountdown(sec);
@@ -260,8 +373,10 @@ function WaveJack() {
     if (recorderRef.current && recorderRef.current.state !== "inactive") {
       recorderRef.current.stop();
     }
+    stopSilenceCheck();
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    if (DEV) setDebugStream(null); // stops the level meter; the panel keeps the last device info
   };
 
   const stopListening = () => {
@@ -545,28 +660,53 @@ function WaveJack() {
            hero visual — no separate decorative illustration competing with
            it for attention. Hidden from assistive tech: the Start Listening
            and Upload buttons are the keyboard/screen-reader equivalents. */}
-        <div
-          aria-hidden="true"
-          onClick={handleOrbClick}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={onDrop}
-          className="flex cursor-pointer flex-col items-center justify-center"
-        >
-          <motion.div animate={{ opacity: dragOver ? 0.6 : 1 }}>
-            <MicOrb
-              state={
-                state === "listening" ? "listening" : state === "processing" ? "processing" : "idle"
-              }
-              countdown={countdown}
-            />
-          </motion.div>
-          {dragOver && <div className="font-signal mt-4 text-xs text-signal">drop to identify</div>}
+        <div className="flex flex-col items-center">
+          <div
+            aria-hidden="true"
+            onClick={handleOrbClick}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
+            className="flex cursor-pointer flex-col items-center justify-center"
+          >
+            <motion.div animate={{ opacity: dragOver ? 0.6 : 1 }}>
+              <MicOrb
+                state={
+                  state === "listening"
+                    ? "listening"
+                    : state === "processing"
+                      ? "processing"
+                      : "idle"
+                }
+                countdown={countdown}
+              />
+            </motion.div>
+            {dragOver && (
+              <div className="font-signal mt-4 text-xs text-signal">drop to identify</div>
+            )}
+          </div>
+          <MicPicker
+            devices={micDevices}
+            value={micId}
+            onChange={chooseMic}
+            disabled={state === "listening" || state === "processing"}
+          />
+          {silentMsg && (
+            <p role="alert" className="mt-2 max-w-xs text-center text-xs text-destructive">
+              {silentMsg}
+            </p>
+          )}
         </div>
       </div>
+
+      {DEV && (
+        <div className="px-6 sm:px-10">
+          <MicDebugPanel stream={debugStream} sent={debugSent} recordingUrl={debugUrl} />
+        </div>
+      )}
 
       {/* The waveform → fingerprint mark, used once here as a section divider
          rather than a repeated decoration. */}
