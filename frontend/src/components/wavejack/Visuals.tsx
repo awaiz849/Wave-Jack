@@ -1,133 +1,77 @@
-import { useEffect, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
 
-type Particle = { x: number; y: number; size: number; delay: number; duration: number };
-
-export function ParticleField() {
-  const [particles, setParticles] = useState<Particle[]>([]);
-
-  useEffect(() => {
-    const arr: Particle[] = Array.from({ length: 60 }, () => ({
-      x: Math.random() * 100,
-      y: Math.random() * 100,
-      size: Math.random() * 2 + 1,
-      delay: Math.random() * 4,
-      duration: Math.random() * 4 + 3,
-    }));
-    setParticles(arr);
-  }, []);
-
+/**
+ * The one recurring visual idea in this design: a waveform trace that
+ * resolves into a fingerprint swirl — "sound becomes a fingerprint." Used as
+ * hero art on the landing page. Flat, thin single-stroke linework only — no
+ * fill, no blur, no glow, matching the rest of the minimal system.
+ */
+export function WaveformFingerprint({ className = "" }: { className?: string }) {
   return (
-    <div className="pointer-events-none fixed inset-0 overflow-hidden">
-      {particles.map((p, i) => (
-        <motion.div
-          key={i}
-          className="absolute rounded-full bg-white"
-          style={{
-            left: `${p.x}%`,
-            top: `${p.y}%`,
-            width: p.size,
-            height: p.size,
-            boxShadow: `0 0 ${p.size * 4}px rgba(180, 150, 255, 0.8)`,
-          }}
-          animate={{
-            opacity: [0.3, 1, 0.3],
-            scale: [1, 1.5, 1],
-          }}
-          transition={{
-            duration: p.duration,
-            repeat: Infinity,
-            delay: p.delay,
-            ease: "easeInOut",
-          }}
-        />
-      ))}
-    </div>
+    <svg
+      viewBox="0 0 560 260"
+      fill="none"
+      className={className}
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <path
+        d="M0 130 H60 L75 90 L90 170 L105 60 L120 200 L135 100 L150 160 L165 130 H210"
+        stroke="var(--accent)"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+      {Array.from({ length: 11 }, (_, i) => {
+        const r = 18 + i * 11;
+        return (
+          <path
+            key={i}
+            d={`M ${380 - r} 130 A ${r} ${r * 0.86} 0 1 1 ${380 + r} 130 A ${r} ${r * 0.86} 0 1 1 ${380 - r} 130`}
+            stroke="var(--accent)"
+            strokeWidth="1.5"
+            fill="none"
+            opacity={0.35 + i * 0.055}
+          />
+        );
+      })}
+    </svg>
   );
 }
 
-export function WaveRibbons() {
-  return (
-    <div className="pointer-events-none fixed inset-0 overflow-hidden">
-      <svg className="absolute inset-0 h-full w-full" preserveAspectRatio="none" viewBox="0 0 1920 1080">
-        <defs>
-          <linearGradient id="purpleWave" x1="0" x2="1" y1="0" y2="0">
-            <stop offset="0%" stopColor="oklch(0.62 0.22 295)" stopOpacity="0" />
-            <stop offset="50%" stopColor="oklch(0.7 0.25 300)" stopOpacity="0.7" />
-            <stop offset="100%" stopColor="oklch(0.62 0.22 295)" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient id="cyanWave" x1="0" x2="1" y1="0" y2="0">
-            <stop offset="0%" stopColor="oklch(0.78 0.16 200)" stopOpacity="0" />
-            <stop offset="50%" stopColor="oklch(0.85 0.18 195)" stopOpacity="0.6" />
-            <stop offset="100%" stopColor="oklch(0.78 0.16 200)" stopOpacity="0" />
-          </linearGradient>
-          <filter id="glow">
-            <feGaussianBlur stdDeviation="6" />
-          </filter>
-        </defs>
-        <motion.path
-          d="M -100 400 Q 480 200 960 450 T 2020 380"
-          stroke="url(#purpleWave)"
-          strokeWidth="3"
-          fill="none"
-          filter="url(#glow)"
-          animate={{
-            d: [
-              "M -100 400 Q 480 200 960 450 T 2020 380",
-              "M -100 420 Q 480 280 960 380 T 2020 460",
-              "M -100 400 Q 480 200 960 450 T 2020 380",
-            ],
-          }}
-          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
-        />
-        <motion.path
-          d="M -100 700 Q 480 880 960 650 T 2020 720"
-          stroke="url(#cyanWave)"
-          strokeWidth="3"
-          fill="none"
-          filter="url(#glow)"
-          animate={{
-            d: [
-              "M -100 700 Q 480 880 960 650 T 2020 720",
-              "M -100 680 Q 480 800 960 720 T 2020 660",
-              "M -100 700 Q 480 880 960 650 T 2020 720",
-            ],
-          }}
-          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
-        />
-      </svg>
-    </div>
-  );
-}
+const BARS = 14;
+const idleBars = () => Array.from({ length: BARS }, (_, i) => 0.12 + ((i * 7) % 5) * 0.02);
 
+/**
+ * Decorative level meter — random bar heights while listening, a still,
+ * low pattern otherwise. (It isn't driven by the real mic signal.)
+ */
 export function LiveWaveform({ active }: { active: boolean }) {
-  const bars = 12;
-  const barsRef = useRef<number[]>(Array.from({ length: bars }, () => 0.3));
-  const [, force] = useState(0);
+  const [heights, setHeights] = useState(idleBars);
 
   useEffect(() => {
-    let raf: number;
-    const tick = () => {
-      barsRef.current = barsRef.current.map(() =>
-        active ? Math.random() * 0.85 + 0.15 : 0.15 + Math.random() * 0.15
-      );
-      force((n) => n + 1);
-      raf = window.setTimeout(() => requestAnimationFrame(tick), 80) as unknown as number;
-    };
-    tick();
-    return () => clearTimeout(raf);
+    if (!active) {
+      setHeights(idleBars());
+      return;
+    }
+    // One plain interval, so the cleanup really stops it. (The old timeout +
+    // requestAnimationFrame chain could slip past cleanup and keep running.)
+    const id = window.setInterval(
+      () => setHeights((h) => h.map(() => Math.random() * 0.85 + 0.15)),
+      90,
+    );
+    return () => window.clearInterval(id);
   }, [active]);
 
   return (
-    <div className="flex h-32 items-end justify-center gap-1.5">
-      {barsRef.current.map((h, i) => (
+    <div className="flex h-24 items-end justify-center gap-1.5" aria-hidden="true">
+      {heights.map((h, i) => (
         <motion.div
           key={i}
-          className="w-3 rounded-t-full"
-          style={{
-            background: `linear-gradient(to top, oklch(0.62 0.22 295), oklch(0.78 0.16 200))`,
-            boxShadow: "0 0 10px oklch(0.7 0.22 260 / 0.6)",
-          }}
+          className="w-1.5"
+          style={{ background: "var(--accent)" }}
           animate={{ height: `${h * 100}%` }}
           transition={{ duration: 0.15, ease: "easeOut" }}
         />
@@ -139,112 +83,89 @@ export function LiveWaveform({ active }: { active: boolean }) {
 interface OrbProps {
   state: "idle" | "listening" | "processing";
   countdown: number;
+  /** Length of a recording in seconds; the ring fills over this time. */
+  total?: number;
 }
 
-export function MicOrb({ state, countdown }: OrbProps) {
+/**
+ * Thin hairline ring instead of a glowing gradient orb — same interaction
+ * (click to record, arc fills as the countdown runs), none of the blur/glow.
+ */
+export function MicOrb({ state, countdown, total = 10 }: OrbProps) {
   const isListening = state === "listening";
   const isProcessing = state === "processing";
-  const progress = isListening ? ((10 - countdown) / 10) * 283 : 0;
+  // Percent of the ring to draw. The circle uses pathLength=100, so this holds
+  // at any rendered size (the old 283 assumed a 100-unit viewBox the SVG never had,
+  // so the ring stopped a third of the way round).
+  const progress = isListening ? ((total - countdown) / total) * 100 : 0;
 
   return (
-    <div className="relative flex h-[340px] w-[340px] items-center justify-center">
-      {/* Outer rings */}
-      {[0, 1, 2].map((i) => (
-        <motion.div
-          key={i}
-          className="absolute rounded-full"
-          style={{
-            width: `${100 - i * 18}%`,
-            height: `${100 - i * 18}%`,
-            border: `1.5px solid ${
-              i === 0 ? "oklch(1 0 0 / 0.15)" : i === 1 ? "oklch(0.78 0.16 200 / 0.5)" : "oklch(0.62 0.22 295 / 0.7)"
-            }`,
-            boxShadow:
-              i === 1
-                ? "0 0 40px oklch(0.78 0.16 200 / 0.4)"
-                : i === 2
-                ? "0 0 50px oklch(0.62 0.22 295 / 0.5)"
-                : "none",
-          }}
-          animate={{
-            scale: [1, 1.05, 1],
-            opacity: [0.6, 1, 0.6],
-          }}
-          transition={{
-            duration: 3 + i * 0.5,
-            repeat: Infinity,
-            ease: "easeInOut",
-            delay: i * 0.3,
-          }}
-        />
-      ))}
-
-      {/* Progress arc */}
-      {isListening && (
-        <svg className="absolute inset-0 h-full w-full -rotate-90">
-          <circle
-            cx="50%"
-            cy="50%"
-            r="45%"
-            fill="none"
-            stroke="oklch(0.85 0.18 195)"
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeDasharray={`${progress} 283`}
-            style={{ filter: "drop-shadow(0 0 8px oklch(0.85 0.18 195))" }}
-          />
-        </svg>
-      )}
-
-      {/* Inner orb */}
-      <motion.div
-        className="relative flex h-[58%] w-[58%] items-center justify-center rounded-full"
+    <div
+      className="relative flex h-[280px] w-[280px] items-center justify-center"
+      aria-hidden="true"
+    >
+      {/* Soft colored glow — the one deliberate exception to "no glow" in
+         this system, reserved for the single interactive focal point so it
+         doesn't read as a black hole on a black background. */}
+      <div
+        className="absolute h-[85%] w-[85%] rounded-full"
         style={{
-          background:
-            "radial-gradient(circle at 30% 30%, oklch(0.35 0.15 290), oklch(0.12 0.06 280) 70%)",
-          boxShadow:
-            "inset 0 0 40px oklch(0 0 0 / 0.6), 0 0 60px oklch(0.62 0.22 295 / 0.5)",
+          background: "radial-gradient(circle, var(--accent) 0%, transparent 70%)",
+          opacity: isListening ? 0.35 : 0.18,
+          filter: "blur(30px)",
+          transition: "opacity 0.4s ease",
         }}
-        animate={
-          isProcessing
-            ? { rotate: 360 }
-            : { scale: [1, 1.04, 1] }
-        }
+      />
+
+      <div
+        className="absolute inset-0 rounded-full border"
+        style={{ borderColor: "var(--border)" }}
+      />
+
+      <svg className="absolute inset-0 h-full w-full -rotate-90">
+        <circle
+          cx="50%"
+          cy="50%"
+          r="49%"
+          fill="none"
+          stroke="var(--accent)"
+          strokeWidth="2"
+          strokeLinecap="round"
+          pathLength={100}
+          strokeDasharray={`${progress} 100`}
+          style={{ transition: "stroke-dasharray 0.3s linear" }}
+        />
+      </svg>
+
+      <motion.div
+        className="relative flex h-[54%] w-[54%] items-center justify-center rounded-full border-2"
+        style={{
+          borderColor: "var(--accent)",
+          background: isListening
+            ? "var(--accent)"
+            : "radial-gradient(circle at 35% 30%, oklch(0.6 0.21 264 / 0.22), oklch(0.6 0.21 264 / 0.06) 70%)",
+        }}
+        animate={isProcessing ? { rotate: 360 } : { scale: [1, 1.03, 1] }}
         transition={
           isProcessing
             ? { duration: 2, repeat: Infinity, ease: "linear" }
-            : { duration: 3, repeat: Infinity, ease: "easeInOut" }
+            : { duration: 2.5, repeat: Infinity, ease: "easeInOut" }
         }
       >
-        <MicIcon />
+        <MicIcon lit={isListening} />
       </motion.div>
     </div>
   );
 }
 
-function MicIcon() {
+function MicIcon({ lit }: { lit: boolean }) {
+  const stroke = lit ? "var(--background)" : "var(--accent)";
   return (
-    <svg width="80" height="80" viewBox="0 0 64 64" fill="none">
-      <defs>
-        <linearGradient id="chromeMic" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#f8f8ff" />
-          <stop offset="40%" stopColor="#c0c0d0" />
-          <stop offset="70%" stopColor="#6a6a85" />
-          <stop offset="100%" stopColor="#2a2a40" />
-        </linearGradient>
-        <linearGradient id="chromeStand" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="#5a5a75" />
-          <stop offset="50%" stopColor="#e0e0ee" />
-          <stop offset="100%" stopColor="#3a3a55" />
-        </linearGradient>
-      </defs>
-      <rect x="22" y="8" width="20" height="32" rx="10" fill="url(#chromeMic)" stroke="#1a1a2e" strokeWidth="0.5" />
-      <rect x="25" y="13" width="14" height="2" rx="1" fill="#1a1a2e" opacity="0.4" />
-      <rect x="25" y="18" width="14" height="2" rx="1" fill="#1a1a2e" opacity="0.4" />
-      <rect x="25" y="23" width="14" height="2" rx="1" fill="#1a1a2e" opacity="0.4" />
-      <path d="M16 36 Q16 48 32 48 Q48 48 48 36" stroke="url(#chromeStand)" strokeWidth="3" fill="none" strokeLinecap="round" />
-      <line x1="32" y1="48" x2="32" y2="56" stroke="url(#chromeStand)" strokeWidth="3" strokeLinecap="round" />
-      <rect x="24" y="55" width="16" height="3" rx="1.5" fill="url(#chromeStand)" />
+    <svg width="46" height="46" viewBox="0 0 24 24" fill="none">
+      <rect x="9" y="2" width="6" height="12" rx="3" stroke={stroke} strokeWidth="2" />
+      <path d="M5 11a7 7 0 0 0 14 0" stroke={stroke} strokeWidth="2" strokeLinecap="round" />
+      <line x1="12" y1="18" x2="12" y2="22" stroke={stroke} strokeWidth="2" strokeLinecap="round" />
+      <line x1="8" y1="22" x2="16" y2="22" stroke={stroke} strokeWidth="2" strokeLinecap="round" />
     </svg>
   );
 }

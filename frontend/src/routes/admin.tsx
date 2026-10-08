@@ -1,58 +1,113 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageShell } from "@/components/wavejack/PageShell";
-import { getUser, isAdmin, getHistory, type HistoryItem } from "@/components/wavejack/Auth";
-import { Trash2, Upload } from "lucide-react";
+import { API_URL } from "@/lib/config";
+import {
+  useAuth,
+  verifyAdmin,
+  authHeaders,
+  getHistory,
+  type HistoryItem,
+} from "@/components/wavejack/Auth";
+import { Trash2, Upload, Music, Activity } from "lucide-react";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({ meta: [{ title: "Admin — WaveJack" }] }),
   component: AdminPage,
 });
 
-type Song = { id?: string | number; title: string; artist: string; fingerprints?: number };
+type Song = { id?: string | number; title: string; artist: string };
+
+// The backend's own message (401 expired session, 403 not admin, 413 too big, 415 not audio…).
+async function apiError(r: Response, fallback: string): Promise<string> {
+  const body = await r.json().catch(() => null);
+  return typeof body?.detail === "string" ? body.detail : `${fallback} (HTTP ${r.status})`;
+}
+
+const inputClass =
+  "rounded-sm border border-border bg-transparent px-4 py-3 text-foreground placeholder:text-muted-foreground transition-colors focus:border-[var(--accent)] focus:outline-none";
 
 function AdminPage() {
   const navigate = useNavigate();
   const [ready, setReady] = useState(false);
   const [songs, setSongs] = useState<Song[]>([]);
+  const [songsState, setSongsState] = useState<"loading" | "ready" | "error">("loading");
+  const [fileInputKey, setFileInputKey] = useState(0); // remount to clear the chosen file
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [title, setTitle] = useState("");
   const [artist, setArtist] = useState("");
   const [youtube, setYoutube] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [deleting, setDeleting] = useState<string | number | null>(null);
 
+  const { user, loading: authLoading } = useAuth();
+
+  // Re-verify with the backend whenever the signed-in user changes
+  // (including sign-out from this or another tab).
   useEffect(() => {
-    const u = getUser();
-    if (!isAdmin(u)) {
-      navigate({ to: "/" });
-      return;
-    }
-    setReady(true);
-    setHistory(getHistory());
-    loadSongs();
-  }, [navigate]);
+    if (authLoading) return;
+    let cancelled = false;
+    verifyAdmin().then((ok) => {
+      if (cancelled) return;
+      if (!ok) {
+        setReady(false);
+        navigate({ to: "/" });
+        return;
+      }
+      setReady(true);
+      setHistory(getHistory());
+      loadSongs();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, user?.id, navigate]);
 
   const loadSongs = () => {
-    fetch("http://localhost:8000/songs")
+    setSongsState("loading");
+    fetch(`${API_URL}/songs`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((data) => setSongs(Array.isArray(data) ? data : data?.songs || []))
-      .catch(() => setSongs([]));
+      .then((data) => {
+        setSongs(Array.isArray(data) ? data : data?.songs || []);
+        setSongsState("ready");
+      })
+      .catch(() => setSongsState("error"));
   };
 
-  const deleteSong = async (id: string | number | undefined) => {
+  const deleteSong = async (song: Song) => {
+    const id = song.id;
     if (id == null) return;
-    try {
-      await fetch(`http://localhost:8000/songs/${id}`, { method: "DELETE" });
-    } catch {
-      /* noop */
+    if (
+      !window.confirm(`Delete "${song.title}" from the library? Its fingerprints are removed too.`)
+    ) {
+      return;
     }
-    setSongs((s) => s.filter((x) => x.id !== id));
+    setDeleting(id);
+    try {
+      const r = await fetch(`${API_URL}/songs/${id}`, {
+        method: "DELETE",
+        headers: await authHeaders(),
+      });
+      if (!r.ok) {
+        setMsg({ text: await apiError(r, "Couldn't delete that song"), ok: false });
+        return;
+      }
+      setSongs((s) => s.filter((x) => x.id !== id));
+    } catch {
+      setMsg({ text: "Couldn't reach the backend to delete that song.", ok: false });
+    } finally {
+      setDeleting(null);
+    }
   };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!file) {
+      setMsg({ text: "Pick an audio file before adding the song.", ok: false });
+      return;
+    }
     setSubmitting(true);
     setMsg(null);
     try {
@@ -60,123 +115,284 @@ function AdminPage() {
       fd.append("title", title);
       fd.append("artist", artist);
       if (youtube) fd.append("youtube_url", youtube);
-      if (file) fd.append("audio", file);
-      const r = await fetch("http://localhost:8000/add", { method: "POST", body: fd });
-      if (!r.ok) throw new Error();
-      setMsg("Song added successfully");
-      setTitle(""); setArtist(""); setYoutube(""); setFile(null);
+      fd.append("audio", file);
+      const r = await fetch(`${API_URL}/add`, {
+        method: "POST",
+        body: fd,
+        headers: await authHeaders(),
+      });
+      if (!r.ok) {
+        setMsg({ text: await apiError(r, "Couldn't add the song"), ok: false });
+        return;
+      }
+      setMsg({ text: `Added "${title}" to the library.`, ok: true });
+      setTitle("");
+      setArtist("");
+      setYoutube("");
+      setFile(null);
+      setFileInputKey((k) => k + 1);
       loadSongs();
     } catch {
-      setMsg("Failed to add song (API offline?)");
+      setMsg({ text: "Couldn't add the song. Check that the backend is running.", ok: false });
     } finally {
       setSubmitting(false);
     }
   };
 
-  if (!ready) return null;
+  if (!ready) {
+    return (
+      <PageShell>
+        <p role="status" className="font-signal text-sm text-muted-foreground">
+          checking admin access…
+        </p>
+      </PageShell>
+    );
+  }
 
-  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
   const identifiesToday = history.filter((h) => h.at >= today.getTime()).length;
 
   return (
     <PageShell>
-      <div className="mx-auto max-w-6xl space-y-8">
-        <h1 className="text-4xl font-bold text-white">Admin Panel</h1>
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <StatCard label="Total Songs" value={songs.length} />
-          <StatCard label="Identifies Today" value={identifiesToday} />
-          <StatCard label="Total Users" value={1} />
+      <div className="space-y-10">
+        <div>
+          <h1 className="font-display text-4xl font-semibold text-foreground">Admin</h1>
+          <p className="mt-2 text-muted-foreground">
+            Manage the song library and review recent activity.
+          </p>
         </div>
 
-        <section className="glass rounded-2xl p-6">
-          <h2 className="mb-4 text-xl font-bold text-white">Add Song</h2>
+        <div className="hairline-t hairline-b grid grid-cols-1 divide-y divide-border py-6 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+          <StatCard
+            icon={<Music size={15} aria-hidden="true" />}
+            label="Songs in library"
+            value={songsState === "ready" ? songs.length : "—"}
+          />
+          <StatCard
+            icon={<Activity size={15} aria-hidden="true" />}
+            label="Identified today (this device)"
+            value={identifiesToday}
+          />
+        </div>
+
+        <section>
+          <h2 className="font-display mb-4 text-xl font-semibold text-foreground">Add a song</h2>
           <form onSubmit={submit} className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <input required placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)}
-              className="rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-white placeholder:text-white/40 focus:border-purple focus:outline-none" />
-            <input required placeholder="Artist" value={artist} onChange={(e) => setArtist(e.target.value)}
-              className="rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-white placeholder:text-white/40 focus:border-purple focus:outline-none" />
-            <input placeholder="YouTube URL" value={youtube} onChange={(e) => setYoutube(e.target.value)}
-              className="rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-white placeholder:text-white/40 focus:border-purple focus:outline-none md:col-span-2" />
-            <input type="file" accept="audio/*" onChange={(e) => setFile(e.target.files?.[0] || null)}
-              className="rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/70 file:mr-3 file:rounded-md file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-white md:col-span-2" />
-            <button type="submit" disabled={submitting}
-              className="flex items-center justify-center gap-2 rounded-lg py-3 font-semibold text-white disabled:opacity-50 md:col-span-2"
-              style={{ background: "var(--gradient-purple)", boxShadow: "var(--shadow-glow-purple)" }}>
-              <Upload size={16} /> {submitting ? "Uploading…" : "Add Song"}
+            <label className="sr-only" htmlFor="song-title">
+              Title
+            </label>
+            <input
+              id="song-title"
+              required
+              maxLength={200}
+              placeholder="Title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className={inputClass}
+            />
+            <label className="sr-only" htmlFor="song-artist">
+              Artist
+            </label>
+            <input
+              id="song-artist"
+              required
+              maxLength={200}
+              placeholder="Artist"
+              value={artist}
+              onChange={(e) => setArtist(e.target.value)}
+              className={inputClass}
+            />
+            <label className="sr-only" htmlFor="song-youtube">
+              YouTube URL (optional)
+            </label>
+            <input
+              id="song-youtube"
+              type="url"
+              placeholder="YouTube URL (optional)"
+              value={youtube}
+              onChange={(e) => setYoutube(e.target.value)}
+              className={`${inputClass} md:col-span-2`}
+            />
+            <label className="sr-only" htmlFor="song-file">
+              Audio file
+            </label>
+            <input
+              key={fileInputKey}
+              id="song-file"
+              type="file"
+              accept="audio/*"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              className="min-w-0 rounded-sm border border-border bg-transparent px-4 py-3 text-sm text-muted-foreground file:mr-3 file:rounded-sm file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-foreground md:col-span-2"
+            />
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex items-center justify-center gap-2 rounded-sm bg-foreground py-3 font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-50 md:col-span-2"
+            >
+              <Upload size={16} aria-hidden="true" /> {submitting ? "Adding…" : "Add song"}
             </button>
-            {msg && <div className="text-sm text-white/70 md:col-span-2">{msg}</div>}
+            {msg && (
+              <div
+                role={msg.ok ? "status" : "alert"}
+                className={`text-sm md:col-span-2 ${msg.ok ? "text-signal" : "text-destructive"}`}
+              >
+                {msg.text}
+              </div>
+            )}
           </form>
+          <p className="font-signal mt-3 text-xs text-muted-foreground">
+            Fingerprinting runs on upload — larger files take a few seconds.
+          </p>
         </section>
 
-        <section className="glass overflow-hidden rounded-2xl">
-          <h2 className="px-6 pt-6 text-xl font-bold text-white">Songs</h2>
-          <table className="mt-4 w-full text-left text-sm">
-            <thead className="border-b border-white/10 text-xs uppercase tracking-wider text-white/50">
-              <tr>
-                <th className="px-6 py-3">Title</th>
-                <th className="px-6 py-3">Artist</th>
-                <th className="px-6 py-3">Fingerprints</th>
-                <th className="px-6 py-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {songs.length === 0 && (
-                <tr><td colSpan={4} className="px-6 py-8 text-center text-white/40">No songs available</td></tr>
-              )}
-              {songs.map((s, i) => (
-                <tr key={s.id ?? i} className="border-b border-white/5">
-                  <td className="px-6 py-3 font-semibold text-white">{s.title}</td>
-                  <td className="px-6 py-3 text-white/70">{s.artist}</td>
-                  <td className="px-6 py-3 text-cyan">{s.fingerprints ?? "—"}</td>
-                  <td className="px-6 py-3 text-right">
-                    <button onClick={() => deleteSong(s.id)}
-                      className="inline-flex items-center gap-1 rounded-md border border-red-500/30 px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10">
-                      <Trash2 size={12} /> Delete
-                    </button>
-                  </td>
+        <section>
+          <h2 className="font-display hairline-b mb-4 pb-4 text-xl font-semibold text-foreground">
+            Library
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="hairline-b font-signal text-xs text-muted-foreground">
+                <tr>
+                  <th scope="col" className="py-3 pr-4 font-normal">
+                    Title
+                  </th>
+                  <th scope="col" className="py-3 pr-4 font-normal">
+                    Artist
+                  </th>
+                  <th className="py-3">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {songsState === "loading" && (
+                  <tr>
+                    <td
+                      colSpan={3}
+                      role="status"
+                      className="font-signal py-10 text-center text-sm text-muted-foreground"
+                    >
+                      loading library…
+                    </td>
+                  </tr>
+                )}
+                {songsState === "error" && (
+                  <tr>
+                    <td colSpan={3} role="alert" className="py-10 text-center text-destructive">
+                      Couldn't load the library.{" "}
+                      <button
+                        type="button"
+                        onClick={loadSongs}
+                        className="underline underline-offset-2"
+                      >
+                        Try again
+                      </button>
+                    </td>
+                  </tr>
+                )}
+                {songsState === "ready" && songs.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="py-10 text-center text-muted-foreground">
+                      Nothing here yet — add your first song above.
+                    </td>
+                  </tr>
+                )}
+                {songsState === "ready" &&
+                  songs.map((s, i) => (
+                    <tr
+                      key={s.id ?? i}
+                      className="hairline-b transition-colors hover:bg-white/[0.03]"
+                    >
+                      <td className="py-3 font-medium text-foreground">{s.title}</td>
+                      <td className="py-3 text-muted-foreground">{s.artist}</td>
+                      <td className="py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => deleteSong(s)}
+                          disabled={deleting === s.id}
+                          aria-label={`Delete ${s.title}`}
+                          className="inline-flex items-center gap-1 rounded-sm border border-destructive/30 px-3 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40"
+                        >
+                          <Trash2 size={12} aria-hidden="true" />{" "}
+                          {deleting === s.id ? "Deleting…" : "Delete"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
         </section>
 
-        <section className="glass overflow-hidden rounded-2xl">
-          <h2 className="px-6 pt-6 text-xl font-bold text-white">Recent Identifies</h2>
-          <table className="mt-4 w-full text-left text-sm">
-            <thead className="border-b border-white/10 text-xs uppercase tracking-wider text-white/50">
-              <tr>
-                <th className="px-6 py-3">Title</th>
-                <th className="px-6 py-3">Artist</th>
-                <th className="px-6 py-3">Confidence</th>
-                <th className="px-6 py-3">Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.length === 0 && (
-                <tr><td colSpan={4} className="px-6 py-8 text-center text-white/40">No identifies yet</td></tr>
-              )}
-              {history.slice(0, 20).map((h, i) => (
-                <tr key={i} className="border-b border-white/5">
-                  <td className="px-6 py-3 font-semibold text-white">{h.title}</td>
-                  <td className="px-6 py-3 text-white/70">{h.artist}</td>
-                  <td className="px-6 py-3 text-cyan">{(h.confidence * 100).toFixed(0)}%</td>
-                  <td className="px-6 py-3 text-white/50">{new Date(h.at).toLocaleString()}</td>
+        <section>
+          <h2 className="font-display hairline-b mb-4 pb-4 text-xl font-semibold text-foreground">
+            Recent identifications{" "}
+            <span className="text-sm font-normal text-muted-foreground">(this device)</span>
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="hairline-b font-signal text-xs text-muted-foreground">
+                <tr>
+                  <th scope="col" className="py-3 pr-4 font-normal">
+                    Title
+                  </th>
+                  <th scope="col" className="py-3 pr-4 font-normal">
+                    Artist
+                  </th>
+                  <th scope="col" className="py-3 pr-4 font-normal">
+                    Confidence
+                  </th>
+                  <th scope="col" className="py-3 pr-4 font-normal">
+                    Time
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {history.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="py-10 text-center text-muted-foreground">
+                      No identifications recorded yet.
+                    </td>
+                  </tr>
+                )}
+                {history.slice(0, 20).map((h, i) => (
+                  <tr key={i} className="hairline-b transition-colors hover:bg-white/[0.03]">
+                    <td className="py-3 font-medium text-foreground">{h.title}</td>
+                    <td className="py-3 text-muted-foreground">{h.artist}</td>
+                    <td className="font-signal py-3 text-signal">
+                      {(h.confidence * 100).toFixed(0)}%
+                    </td>
+                    <td className="font-signal py-3 text-xs text-muted-foreground">
+                      {new Date(h.at).toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
       </div>
     </PageShell>
   );
 }
 
-function StatCard({ label, value }: { label: string; value: number }) {
+function StatCard({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number | string;
+}) {
   return (
-    <div className="glass rounded-2xl p-6">
-      <div className="text-xs uppercase tracking-wider text-white/50">{label}</div>
-      <div className="mt-2 text-4xl font-bold text-gradient-wave">{value}</div>
+    <div className="px-6 py-2 first:pl-0 sm:px-8">
+      <div className="flex items-center gap-2 text-muted-foreground">
+        {icon}
+        <span className="text-sm">{label}</span>
+      </div>
+      <div className="font-signal mt-2 text-4xl font-medium text-signal">{value}</div>
     </div>
   );
 }

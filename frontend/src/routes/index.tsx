@@ -1,21 +1,20 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload, LogOut, AudioWaveform, AlertCircle } from "lucide-react";
-import { ParticleField, WaveRibbons, MicOrb, LiveWaveform } from "@/components/wavejack/Visuals";
+import { Upload, LogOut, AlertCircle } from "lucide-react";
+import { MicOrb, LiveWaveform, WaveformFingerprint } from "@/components/wavejack/Visuals";
+import { PageShell } from "@/components/wavejack/PageShell";
+import { API_URL, WS_URL } from "@/lib/config";
 import {
   AuthModal,
   LimitModal,
-  getUser,
-  setUser as persistUser,
+  useAuth,
+  signOut,
   getGuestUses,
   incGuestUses,
   addHistory,
   addHistoryDB,
-  isAdmin,
-  type AuthUser,
 } from "@/components/wavejack/Auth";
-import { Link } from "@tanstack/react-router";
 import { RecentSearches, artFor, type Track } from "@/components/wavejack/RecentSearches";
 
 export const Route = createFileRoute("/")({
@@ -30,8 +29,6 @@ export const Route = createFileRoute("/")({
   }),
   component: WaveJack,
 });
-
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 type AppState = "idle" | "listening" | "processing" | "result" | "error";
 
@@ -52,33 +49,62 @@ const PIPELINE_STEPS = [
 
 const RECORD_SECONDS = 10;
 
+// FIX: mobile networks (carrier NAT, background-tab throttling, screen lock)
+// can silently drop a WebSocket or let a fetch hang with no error and no
+// close event ever firing. Previously nothing timed the "processing" state
+// out, so a dropped connection left the UI stuck on the spinner forever even
+// though the backend may have already matched the song. This caps it.
+const PROCESSING_TIMEOUT_MS = 20000;
+
 function WaveJack() {
   const [state, setState] = useState<AppState>("idle");
   const [countdown, setCountdown] = useState(RECORD_SECONDS);
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const { user, loading: authLoading } = useAuth();
   const [guestUses, setGuestUses] = useState(0);
   const [authMode, setAuthMode] = useState<"signin" | "signup" | null>(null);
   const [showLimit, setShowLimit] = useState(false);
   const [pipelineStep, setPipelineStep] = useState(0);
   const [result, setResult] = useState<IdentifyResponse | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null); // ← FIX: error state
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [tracks, setTracks] = useState<Track[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
   // Mic recording refs
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-// keep recorderRef, cdTimerRef, stopTimerRef
-// remove chunksRef and streamRef
   const cdTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const waitingForResultRef = useRef(false);
   const matchFoundRef = useRef(false);
+  const processingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Errors stay on screen until the next action — no auto-dismiss timer to race
+  // a new recording, and no time limit on reading the message.
+  const showError = (msg: string) => {
+    setErrorMsg(msg);
+    setState("error");
+  };
+
+  // FIX: single place that arms/clears the stuck-processing safety net.
+  const clearProcessingTimeout = () => {
+    if (processingTimeoutRef.current) {
+      clearTimeout(processingTimeoutRef.current);
+      processingTimeoutRef.current = null;
+    }
+  };
+  const armProcessingTimeout = () => {
+    clearProcessingTimeout();
+    processingTimeoutRef.current = setTimeout(() => {
+      waitingForResultRef.current = false;
+      wsRef.current?.close();
+      showError("Taking too long to respond — the connection may have dropped. Try again.");
+    }, PROCESSING_TIMEOUT_MS);
+  };
   useEffect(() => {
-  setUser(getUser());
-  setGuestUses(getGuestUses());
-}, []);
+    setGuestUses(getGuestUses());
+  }, []);
 
   // Pipeline animation
   useEffect(() => {
@@ -106,95 +132,167 @@ function WaveJack() {
   };
 
   // ── START MIC RECORDING ──
- const startListening = async () => {
-  if (!checkLimit()) return;
-  matchFoundRef.current = false;      // ← add
-  waitingForResultRef.current = false; // ← add
-  setResult(null);
-  setErrorMsg(null);
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const ws = new WebSocket(`${API.replace("http", "ws")}/ws/recognize`);
-    wsRef.current = ws;
-
-    ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  if (data.status === "match") {
-    matchFoundRef.current = true;
+  const startListening = async () => {
+    if (!checkLimit()) return;
+    matchFoundRef.current = false;
     waitingForResultRef.current = false;
-    finalizeResult(data.result);
-    // don't close here — let backend close it
-  } else if (data.status === "no_match") {
-    waitingForResultRef.current = false;
-    setErrorMsg("Song not found in database");
-    setState("error");
-   
-  }
-};
+    setResult(null);
+    setErrorMsg(null);
 
-ws.onclose = () => {
-  if (!matchFoundRef.current && !waitingForResultRef.current) setState("idle");
-  matchFoundRef.current = false;
-};
+    if (!navigator.mediaDevices?.getUserMedia) {
+      // Browsers only expose the mic on https:// or localhost (not e.g. http://192.168.x.x).
+      showError("Recording needs a secure page (https or localhost). You can still upload a file.");
+      return;
+    }
+    if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported("audio/webm")) {
+      showError(
+        "This browser can't record in the format WaveJack needs yet. Upload a file instead.",
+      );
+      return;
+    }
 
-ws.onerror = () => {
-  setErrorMsg("WebSocket error — is the backend running?");
-  setState("error");
-  setTimeout(() => { setState("idle"); setErrorMsg(null); }, 5000);
-};
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      const name = err instanceof DOMException ? err.name : "";
+      showError(
+        name === "NotAllowedError"
+          ? "Microphone access is blocked. Allow it in your browser's site settings, or upload a file."
+          : name === "NotFoundError"
+            ? "No microphone found. Plug one in, or upload a file instead."
+            : "Couldn't start the microphone. Try again, or upload a file instead.",
+      );
+      return;
+    }
 
+    try {
+      streamRef.current = stream;
+      const ws = new WebSocket(`${WS_URL}/ws/recognize`);
+      wsRef.current = ws;
 
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.status === "match") {
+          matchFoundRef.current = true;
+          waitingForResultRef.current = false;
+          clearProcessingTimeout(); // FIX: real result arrived, cancel the safety net
+          // The backend can match early, while we're still recording; stop the
+          // countdown too, or it later calls stopListening() and overwrites the result.
+          endRecording();
+          finalizeResult(data.result);
+          // don't close here — let backend close it
+        } else if (data.status === "no_match" || data.status === "error") {
+          waitingForResultRef.current = false;
+          clearProcessingTimeout(); // FIX
+          endRecording();
+          showError(
+            data.status === "no_match"
+              ? "No match — this song isn't in the library yet."
+              : data.detail || "The server couldn't process that recording.",
+          );
+        }
+      };
 
-    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-    recorderRef.current = recorder;
+      ws.onclose = () => {
+        clearProcessingTimeout(); // socket is gone either way, no point waiting on it
+        if (matchFoundRef.current) return; // result is already on screen
+        endRecording();
+        if (waitingForResultRef.current) {
+          // Closed before answering (server error, dropped connection): say so now
+          // rather than leaving the spinner up until the 20 s timeout.
+          waitingForResultRef.current = false;
+          showError("Lost the connection before the server answered. Try again.");
+        } else {
+          // Don't overwrite an error or "no match" that's already showing.
+          setState((s) => (s === "listening" ? "idle" : s));
+        }
+      };
 
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-        ws.send(e.data);
-      }
-    };
+      ws.onerror = () => {
+        clearProcessingTimeout(); // FIX
+        waitingForResultRef.current = false; // onclose follows; this message wins
+        endRecording();
+        showError("Couldn't reach the recognition server — is the backend running?");
+      };
 
-    recorder.start(2000); // send a chunk every 2s
-    setState("listening");
+      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      recorderRef.current = recorder;
 
-    let sec = RECORD_SECONDS;
-    setCountdown(sec);
-    cdTimerRef.current = setInterval(() => {
-      sec--;
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+          ws.send(e.data);
+        }
+      };
+
+      // Send audio every second: the backend matches as soon as each piece lands
+      // and answers early once the evidence is clear (measured: median 4.3 s vs
+      // 5.3 s with 2 s pieces, same accuracy). Recording still stops at 10 s.
+      recorder.start(1000);
+      setState("listening");
+
+      let sec = RECORD_SECONDS;
       setCountdown(sec);
-      if (sec <= 0) stopListening();
-    }, 1000);
-    stopTimerRef.current = setTimeout(stopListening, RECORD_SECONDS * 1000);
+      cdTimerRef.current = setInterval(() => {
+        sec--;
+        setCountdown(sec);
+        if (sec <= 0) stopListening();
+      }, 1000);
+      stopTimerRef.current = setTimeout(stopListening, RECORD_SECONDS * 1000);
+    } catch (err) {
+      console.error("Recording failed to start:", err);
+      endRecording();
+      wsRef.current?.close();
+      showError("Couldn't start recording. Try again, or upload a file instead.");
+    }
+  };
 
-  } catch {
-    alert("Microphone access denied.");
-  }
-};
+  // Stops the countdown, the recorder and the mic itself (releases the browser's mic indicator).
+  const endRecording = () => {
+    if (cdTimerRef.current) {
+      clearInterval(cdTimerRef.current);
+      cdTimerRef.current = null;
+    }
+    if (stopTimerRef.current) {
+      clearTimeout(stopTimerRef.current);
+      stopTimerRef.current = null;
+    }
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      recorderRef.current.stop();
+    }
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  };
 
   const stopListening = () => {
-  if (cdTimerRef.current) { clearInterval(cdTimerRef.current); cdTimerRef.current = null; }
-  if (stopTimerRef.current) { clearTimeout(stopTimerRef.current); stopTimerRef.current = null; }
-  if (recorderRef.current && recorderRef.current.state !== "inactive") {
-    recorderRef.current.stop();
-  }
-  waitingForResultRef.current = true;
-  setState("processing");
-  // give recorder time to flush final chunk then signal done
-  setTimeout(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "done" }));
-    }
-  }, 500);
-};
+    endRecording();
+    waitingForResultRef.current = true;
+    setState("processing");
+    armProcessingTimeout(); // FIX: guarantee we leave "processing" even if the socket dies silently
+    // give recorder time to flush final chunk then signal done
+    setTimeout(() => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "done" }));
+      }
+    }, 500);
+  };
   // ── PROCESS AUDIO ──
   const runProcessing = async (file: Blob | File) => {
     setState("processing");
     setErrorMsg(null);
+    // FIX: an AbortController timeout so a hung mobile connection can't leave
+    // this fetch pending forever with no error and no response.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PROCESSING_TIMEOUT_MS);
     try {
       const fd = new FormData();
       fd.append("file", file, "clip.webm");
-      const r = await fetch(`${API}/identify`, { method: "POST", body: fd });
+      const r = await fetch(`${API_URL}/identify`, {
+        method: "POST",
+        body: fd,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
         throw new Error(err?.detail || `Server error ${r.status}`);
@@ -204,23 +302,32 @@ ws.onerror = () => {
       if (resp.confidence > 1) resp.confidence = resp.confidence / 100;
       finalizeResult(resp);
     } catch (err: unknown) {
-      // ── FIX: show the error to the user instead of silently resetting ──
+      clearTimeout(timeoutId);
+      // fetch() rejects with a TypeError ("Failed to fetch") when the server is unreachable.
       const msg =
-        err instanceof Error
-          ? err.message
-          : "Could not reach the WaveJack API — is the backend running?";
+        err instanceof DOMException && err.name === "AbortError"
+          ? "Taking too long to respond — check your connection and try again."
+          : err instanceof TypeError || !(err instanceof Error)
+            ? "Could not reach the WaveJack API — is the backend running?"
+            : err.message;
       console.error("Identify error:", err);
-      setErrorMsg(msg);
-      setState("error");
-      // Auto-clear after 5 s so the user can try again
-      setTimeout(() => {
-        setState("idle");
-        setErrorMsg(null);
-      }, 5000);
+      showError(msg);
     }
   };
 
+  const statusAnnouncement =
+    state === "listening"
+      ? `Listening for ${RECORD_SECONDS} seconds.`
+      : state === "processing"
+        ? "Identifying the song…"
+        : state === "result" && result
+          ? `Matched: ${result.title} by ${result.artist}.`
+          : state === "error"
+            ? `Identification failed. ${errorMsg ?? ""}`
+            : "";
+
   const finalizeResult = (resp: IdentifyResponse) => {
+    clearProcessingTimeout(); // FIX: belt-and-suspenders — never leave the timer armed once we have a result
     setResult(resp);
     setState("result");
 
@@ -232,7 +339,9 @@ ws.onerror = () => {
     };
 
     addHistory(histItem);
-    addHistoryDB(resp.song_id || null, histItem);
+    addHistoryDB(resp.song_id || null, histItem).catch((e) =>
+      console.error("[WaveJack] couldn't save search history:", e),
+    );
 
     setTracks((prev) => [
       {
@@ -245,7 +354,6 @@ ws.onerror = () => {
     ]);
 
     if (!user) incGuestUses();
-    
   };
 
   const handleFile = (file: File) => {
@@ -262,237 +370,214 @@ ws.onerror = () => {
     if (f) handleFile(f);
   };
 
+  // useAuth() picks up the SIGNED_OUT event; nothing to clear by hand.
   const logout = () => {
-    persistUser(null);
-    setUser(null);
+    signOut().catch((e) => console.error("[WaveJack] sign-out failed:", e));
   };
 
   const handleOrbClick = () => {
-  if (state === "listening") {
-    stopListening();
-    return;
-  }
-  if (state === "idle" || state === "error" || state === "result") startListening();
-};
+    if (state === "listening") {
+      stopListening();
+      return;
+    }
+    if (state === "idle" || state === "error" || state === "result") startListening();
+  };
 
   return (
-    <div className="relative min-h-screen overflow-hidden">
-      <ParticleField />
-      <WaveRibbons />
+    <PageShell
+      bare
+      rightSlot={
+        // Render nothing until the stored session is read, so signed-in users
+        // don't see "Sign In / Sign Up" flash first.
+        authLoading ? null : user ? (
+          <>
+            <span className="text-sm text-foreground">Hi, {user.name}</span>
+            <button
+              onClick={logout}
+              className="flex items-center gap-1.5 rounded-full border border-border px-4 py-1.5 text-sm text-foreground transition-colors hover:bg-white/[0.04]"
+            >
+              <LogOut size={14} aria-hidden="true" /> Logout
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="font-signal mr-1 text-xs text-muted-foreground">
+              {Math.max(0, 2 - guestUses)} free left
+            </span>
+            <button
+              onClick={() => setAuthMode("signin")}
+              className="rounded-full border border-border px-5 py-1.5 text-sm text-foreground transition-colors hover:bg-white/[0.04]"
+            >
+              Sign In
+            </button>
+            <button
+              onClick={() => setAuthMode("signup")}
+              className="rounded-full bg-foreground px-5 py-1.5 text-sm font-semibold text-background transition-opacity hover:opacity-90"
+            >
+              Sign Up
+            </button>
+          </>
+        )
+      }
+    >
+      {/* Hero — asymmetric two columns: copy + status on the left, the
+         interactive orb on the right, echoing the waveform-into-fingerprint
+         mark used in the nav. */}
+      <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-16 px-6 pt-16 pb-10 sm:px-10 lg:grid-cols-2 lg:pt-24">
+        <div>
+          <h1 className="font-display text-6xl font-semibold leading-[1.05] text-foreground sm:text-7xl">
+            Identify
+            <br />
+            Any Song
+          </h1>
 
-      {/* Navbar */}
-      <nav className="relative z-20 flex items-center justify-between px-8 py-5">
-        <div className="flex items-center gap-2.5">
-          <div
-            className="flex h-9 w-9 items-center justify-center rounded-lg"
-            style={{
-              background: "var(--gradient-purple)",
-              boxShadow: "0 0 20px oklch(0.62 0.22 295 / 0.6)",
-            }}
-          >
-            <AudioWaveform size={20} className="text-white" />
+          {/* Screen readers get one short announcement per state change; the
+             animated text below changes too often (countdown, pipeline steps). */}
+          <p role="status" aria-live="polite" className="sr-only">
+            {statusAnnouncement}
+          </p>
+
+          <div className="hairline-t mt-8 max-w-sm pt-5" aria-hidden="true">
+            <AnimatePresence mode="wait">
+              {state === "idle" && (
+                <motion.div
+                  key="idle"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                >
+                  <span className="font-signal text-sm text-signal">ready</span>
+                  <span className="font-signal text-sm text-muted-foreground">
+                    {" "}
+                    · tap the orb to start
+                  </span>
+                </motion.div>
+              )}
+              {state === "listening" && (
+                <motion.div
+                  key="listening"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                >
+                  <span className="font-signal text-sm text-signal">listening · {countdown}s</span>
+                  <span className="font-signal text-sm text-muted-foreground"> · tap to stop</span>
+                </motion.div>
+              )}
+              {state === "processing" && (
+                <motion.div
+                  key="proc"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                >
+                  <div className="font-signal text-sm text-signal">
+                    {PIPELINE_STEPS[pipelineStep]}
+                  </div>
+                </motion.div>
+              )}
+              {state === "error" && (
+                <motion.div
+                  key="error"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="flex items-start gap-2"
+                >
+                  <AlertCircle size={15} className="mt-0.5 shrink-0 text-destructive" />
+                  <div>
+                    <div className="font-signal text-sm text-destructive">
+                      identification failed
+                    </div>
+                    <div className="mt-1 text-sm text-muted-foreground">{errorMsg}</div>
+                  </div>
+                </motion.div>
+              )}
+              {state === "result" && result && (
+                <motion.div
+                  key="result"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                >
+                  <div className="font-signal text-sm text-signal">
+                    matched · {Math.round(result.confidence * 100)}% confidence
+                  </div>
+                  <div className="font-display mt-2 text-2xl font-semibold text-foreground">
+                    {result.title}
+                  </div>
+                  <div className="text-base text-muted-foreground">{result.artist}</div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
-          <span className="text-xl font-bold tracking-tight text-white">WaveJack</span>
+
+          <div className="hairline-t mt-6 flex flex-wrap items-center gap-4 pt-6">
+            <button
+              onClick={handleOrbClick}
+              className="rounded-full bg-foreground px-6 py-3 text-sm font-semibold text-background transition-opacity hover:opacity-90"
+            >
+              {state === "listening" ? "Stop Listening" : "Start Listening"}
+            </button>
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="flex items-center gap-2 rounded-full border border-border px-6 py-3 text-sm text-foreground transition-colors hover:bg-white/[0.04]"
+            >
+              <Upload size={15} /> Upload audio
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="audio/*"
+              className="hidden"
+              tabIndex={-1}
+              aria-label="Audio file to identify"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = ""; // so picking the same file again still fires onChange
+                if (f) handleFile(f);
+              }}
+            />
+          </div>
         </div>
 
-        <div className="hidden items-center gap-8 md:flex">
-          <Link to="/" className="text-sm text-white hover:text-white/80">
-            Home
-          </Link>
-          <Link to="/history" className="text-sm text-white/60 hover:text-white">
-            History
-          </Link>
-          <Link to="/discover" className="text-sm text-white/60 hover:text-white">
-            Discover
-          </Link>
-          {isAdmin(user) && (
-            <Link to="/admin" className="text-sm text-cyan hover:text-white">
-              Admin
-            </Link>
-          )}
-        </div>
-
-        <div className="flex items-center gap-3">
-          {user ? (
-            <>
-              <span className="text-sm text-white">Hi, {user.name}</span>
-              <button
-                onClick={logout}
-                className="flex items-center gap-1.5 rounded-full border border-white/20 px-4 py-1.5 text-sm text-white hover:bg-white/5"
-              >
-                <LogOut size={14} /> Logout
-              </button>
-            </>
-          ) : (
-            <>
-              <span className="text-xs text-white/40 mr-1">
-                {Math.max(0, 2 - guestUses)} free left
-              </span>
-              <button
-                onClick={() => setAuthMode("signin")}
-                className="rounded-full border border-white/30 px-5 py-1.5 text-sm text-white hover:bg-white/5"
-              >
-                Sign In
-              </button>
-              <button
-                onClick={() => setAuthMode("signup")}
-                className="rounded-full bg-white px-5 py-1.5 text-sm font-semibold text-black hover:bg-white/90"
-              >
-                Sign Up
-              </button>
-            </>
-          )}
-        </div>
-      </nav>
-
-      {/* Main */}
-      <main className="relative z-10 flex flex-col items-center justify-center px-4 pt-4 pb-40">
-        <div onClick={handleOrbClick} className="cursor-pointer">
-          <MicOrb
-            state={
-              state === "result"
-                ? "idle"
-                : state === "processing"
-                  ? "processing"
-                  : state === "listening"
-                    ? "listening"
-                    : "idle"
-            }
-            countdown={countdown}
-          />
-        </div>
-
-        <div className="mt-2 text-center">
-          <AnimatePresence mode="wait">
-            {state === "idle" && (
-              <motion.div
-                key="idle"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-              >
-                <div className="text-sm uppercase tracking-[0.3em] text-white/60">
-                  tap to identify
-                </div>
-                <div className="mt-1 text-5xl font-bold text-white">Ready</div>
-              </motion.div>
-            )}
-            {state === "listening" && (
-              <motion.div
-                key="listening"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-              >
-                <div className="text-sm uppercase tracking-[0.3em] text-white/60">
-                  listening — tap to stop
-                </div>
-                <div className="mt-1 text-5xl font-bold text-white">{countdown}s</div>
-              </motion.div>
-            )}
-            {state === "processing" && (
-              <motion.div
-                key="proc"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="font-mono text-left"
-              >
-                <div className="text-xs uppercase tracking-[0.3em] text-cyan">processing</div>
-                <div className="mt-2 space-y-1">
-                  {PIPELINE_STEPS.slice(0, pipelineStep + 1).map((s, i) => (
-                    <motion.div
-                      key={i}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      className="text-xs text-white/70"
-                    >
-                      {s}
-                    </motion.div>
-                  ))}
-                </div>
-              </motion.div>
-            )}
-            {/* ── FIX: error state is now visible to the user ── */}
-            {state === "error" && (
-              <motion.div
-                key="error"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="flex flex-col items-center gap-2"
-              >
-                <div className="flex items-center gap-2 text-red-400">
-                  <AlertCircle size={18} />
-                  <span className="text-sm uppercase tracking-[0.2em]">identification failed</span>
-                </div>
-                <div className="max-w-xs text-sm text-white/60">{errorMsg}</div>
-                <div className="text-xs text-white/30">tap the orb to try again</div>
-              </motion.div>
-            )}
-            {state === "result" && result && (
-              <motion.div
-                key="result"
-                initial={{ opacity: 0, y: 30, scale: 0.9 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ type: "spring", stiffness: 200, damping: 18 }}
-              >
-                <div className="text-xs uppercase tracking-[0.3em] text-cyan">match found</div>
-                <div className="mt-1 text-4xl font-bold text-gradient-wave">{result.title}</div>
-                <div className="mt-1 text-lg text-white/70">{result.artist}</div>
-                
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {/* Upload zone */}
-        <motion.div
+        {/* Right column: the mic orb doubles as the click target and the
+           hero visual — no separate decorative illustration competing with
+           it for attention. Hidden from assistive tech: the Start Listening
+           and Upload buttons are the keyboard/screen-reader equivalents. */}
+        <div
+          aria-hidden="true"
+          onClick={handleOrbClick}
           onDragOver={(e) => {
             e.preventDefault();
             setDragOver(true);
           }}
           onDragLeave={() => setDragOver(false)}
           onDrop={onDrop}
-          animate={{ borderColor: dragOver ? "oklch(0.78 0.16 200)" : "oklch(1 0 0 / 0.2)" }}
-          className="mt-10 flex w-[460px] max-w-full items-center justify-between gap-4 rounded-2xl border-2 border-dashed bg-white/[0.03] p-4 backdrop-blur-sm"
+          className="flex cursor-pointer flex-col items-center justify-center"
         >
-          <div className="text-sm text-white/70">Drag &amp; Drop Audio to Identify</div>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="audio/*"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleFile(f);
-            }}
-          />
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-transform hover:scale-105"
-            style={{ background: "var(--gradient-purple)", boxShadow: "var(--shadow-glow-purple)" }}
-          >
-            <Upload size={16} /> Upload
-          </button>
-        </motion.div>
-      </main>
-
-      {/* Bottom-left: Recent Searches */}
-      <div className="fixed bottom-6 left-6 z-10 hidden lg:block">
-        <RecentSearches tracks={tracks} />
+          <motion.div animate={{ opacity: dragOver ? 0.6 : 1 }}>
+            <MicOrb
+              state={
+                state === "listening" ? "listening" : state === "processing" ? "processing" : "idle"
+              }
+              countdown={countdown}
+            />
+          </motion.div>
+          {dragOver && <div className="font-signal mt-4 text-xs text-signal">drop to identify</div>}
+        </div>
       </div>
 
-      {/* Bottom-right: Live Waveform */}
-      <div className="fixed bottom-6 right-6 z-10 hidden lg:block">
-        <div className="glass relative w-[400px] rounded-2xl p-5">
-          <div
-            className="absolute -top-3 right-5 rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-white"
-            style={{ background: "var(--gradient-wave)" }}
-          >
-            Live Waveform
-          </div>
+      {/* The waveform → fingerprint mark, used once here as a section divider
+         rather than a repeated decoration. */}
+      <div className="mx-auto max-w-6xl px-6 py-4 opacity-70 sm:px-10">
+        <WaveformFingerprint className="h-16 w-full" />
+      </div>
+
+      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 px-6 pb-24 pt-6 sm:px-10 lg:grid-cols-[1fr_auto]">
+        <RecentSearches tracks={tracks} />
+        <div className="panel w-full rounded-md p-5 lg:w-[380px]" aria-hidden="true">
+          <div className="font-signal mb-1 text-xs text-muted-foreground">live waveform</div>
           <LiveWaveform active={state === "listening"} />
         </div>
       </div>
@@ -501,8 +586,7 @@ ws.onerror = () => {
         mode={authMode}
         onClose={() => setAuthMode(null)}
         onSwitchMode={(m) => setAuthMode(m)}
-        onAuth={(u) => {
-          setUser(u);
+        onAuth={() => {
           setAuthMode(null);
           setShowLimit(false);
         }}
@@ -515,6 +599,6 @@ ws.onerror = () => {
           setAuthMode("signup");
         }}
       />
-    </div>
+    </PageShell>
   );
 }

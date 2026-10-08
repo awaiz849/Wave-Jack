@@ -1,11 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Mail, Lock } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import {
+  isAuthApiError,
+  isAuthRetryableFetchError,
+  type AuthError,
+  type Session,
+  type User,
+} from "@supabase/supabase-js";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
+import { API_URL } from "@/lib/config";
+import { useDialog } from "@/lib/use-dialog";
 
-export const ADMIN_EMAIL = "mohd.awaiz388@gmail.com";
-
-export type AuthUser = { email: string; name: string };
+export type AuthUser = { id: string; email: string; name: string };
 
 export type HistoryItem = {
   title: string;
@@ -19,7 +26,11 @@ export type HistoryItem = {
 const HISTORY_KEY = "wavejack_history";
 export function getHistory(): HistoryItem[] {
   if (typeof window === "undefined") return [];
-  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; }
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+  } catch {
+    return [];
+  }
 }
 export function addHistory(item: HistoryItem) {
   const list = [item, ...getHistory()].slice(0, 200);
@@ -28,40 +39,45 @@ export function addHistory(item: HistoryItem) {
 
 // ── SUPABASE HISTORY ──
 export async function addHistoryDB(songId: number | null, item: HistoryItem) {
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user) return;
-    await supabase.from("search_history").insert({
-      user_id: session.user.id,
-      song_id: songId,
-      searched_at: new Date(item.at).toISOString(),
-    });
-  } catch { /* non-critical */ }
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session?.user) return;
+  const { error } = await supabase.from("search_history").insert({
+    user_id: session.user.id,
+    song_id: songId,
+    searched_at: new Date(item.at).toISOString(),
+  });
+  if (error) console.error("[WaveJack] couldn't save search history:", error.message);
 }
 
 export async function getHistoryDB(): Promise<HistoryItem[]> {
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user) return [];
-    const { data } = await supabase
-      .from("search_history")
-      .select("searched_at, songs(title, artist)")
-      .eq("user_id", session.user.id)
-      .order("searched_at", { ascending: false })
-      .limit(100);
-    if (!data) return [];
-    return data.map((row: any) => ({
-      title: row.songs?.title || "Unknown",
-      artist: row.songs?.artist || "Unknown",
-      confidence: 0, hashes_matched: 0,
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session?.user) return [];
+  const { data, error } = await supabase
+    .from("search_history")
+    .select("searched_at, songs(title, artist)")
+    .eq("user_id", session.user.id)
+    .order("searched_at", { ascending: false })
+    .limit(100);
+  if (error) throw new Error(`couldn't load search history: ${error.message}`);
+  // No generated DB types; supabase-js may type the joined row as an object or an array.
+  type Row = {
+    searched_at: string;
+    songs: { title: string; artist: string } | { title: string; artist: string }[] | null;
+  };
+  return ((data ?? []) as unknown as Row[]).map((row) => {
+    const song = Array.isArray(row.songs) ? row.songs[0] : row.songs;
+    return {
+      title: song?.title || "Unknown",
+      artist: song?.artist || "Unknown",
+      confidence: 0,
+      hashes_matched: 0,
       at: new Date(row.searched_at).getTime(),
-    }));
-  } catch { return []; }
-}
-
-// ── ADMIN ──
-export function isAdmin(u: AuthUser | null) {
-  return !!u && u.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+    };
+  });
 }
 
 // ── GUEST ──
@@ -74,22 +90,168 @@ export function incGuestUses() {
   localStorage.setItem(USES_KEY, String(getGuestUses() + 1));
 }
 
-// ── LOCAL USER CACHE ──
-const KEY = "wavejack_user";
-export function getUser(): AuthUser | null {
-  if (typeof window === "undefined") return null;
-  try { const v = localStorage.getItem(KEY); return v ? JSON.parse(v) : null; } catch { return null; }
+// ── SESSION (Supabase is the only source of truth) ──
+function toAuthUser(u: User): AuthUser {
+  const email = u.email ?? "";
+  const name = (u.user_metadata?.name as string | undefined) || email.split("@")[0];
+  return { id: u.id, email, name };
 }
-export function setUser(u: AuthUser | null) {
-  if (u) localStorage.setItem(KEY, JSON.stringify(u));
-  else localStorage.removeItem(KEY);
+
+// getSession() only reads what's stored in the browser. Once per page load, ask the
+// auth server whether that session is real; if the server rejects it (forged,
+// revoked, deleted user) drop it locally. Network errors keep it (offline is fine).
+let sessionCheck: Promise<void> | null = null;
+function validateStoredSessionOnce() {
+  sessionCheck ??= (async () => {
+    const { error } = await supabase.auth.getUser();
+    if (error && isAuthApiError(error) && (error.status === 401 || error.status === 403)) {
+      console.warn("[WaveJack] stored session was rejected by the auth server, signing out.");
+      await supabase.auth.signOut({ scope: "local" });
+    }
+  })().catch((e) => console.error("[WaveJack] session check failed:", e));
+  return sessionCheck;
+}
+
+/**
+ * Current user, from supabase.auth.getSession() on mount and kept in sync by
+ * onAuthStateChange (sign-in, sign-out, token refresh, other tabs).
+ * `loading` is true until the stored session has been read.
+ */
+export function useAuth(): { user: AuthUser | null; loading: boolean } {
+  const [state, setState] = useState<{ user: AuthUser | null; loading: boolean }>({
+    user: null,
+    loading: true,
+  });
+
+  useEffect(() => {
+    // The old app cached a hand-written user object here; it must never be trusted again.
+    try {
+      localStorage.removeItem("wavejack_user");
+    } catch {
+      /* storage unavailable */
+    }
+
+    let active = true;
+    // getSession and INITIAL_SESSION / TOKEN_REFRESHED report the same user repeatedly;
+    // keep the old object so effects keyed on `user` don't re-run for nothing.
+    const update = (session: Session | null) => {
+      if (!active) return;
+      const next = session ? toAuthUser(session.user) : null;
+      setState((prev) => {
+        const same =
+          prev.user?.id === next?.id &&
+          prev.user?.email === next?.email &&
+          prev.user?.name === next?.name;
+        return same && !prev.loading ? prev : { user: next, loading: false };
+      });
+    };
+    supabase.auth.getSession().then(({ data }) => {
+      update(data.session);
+      if (data.session) validateStoredSessionOnce();
+    });
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => update(session));
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  return state;
+}
+
+export async function signOut(): Promise<void> {
+  const { error } = await supabase.auth.signOut();
+  // A global sign-out needs the network; if it fails, still drop the session on this device.
+  if (error) {
+    console.error("[WaveJack] sign-out request failed, clearing local session:", error.message);
+    await supabase.auth.signOut({ scope: "local" });
+  }
+}
+
+// ── ADMIN ──
+// The backend decides who is an admin (backend/auth.py, ADMIN_EMAILS); the
+// frontend only asks, so no admin address ships in the JS bundle.
+
+/** Authorization header for backend calls made as the signed-in user. */
+export async function authHeaders(): Promise<Record<string, string>> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  return session ? { Authorization: `Bearer ${session.access_token}` } : {};
+}
+
+/** GET /admin/me: the backend verifies the token with Supabase and checks the admin list. */
+export async function verifyAdmin(): Promise<boolean> {
+  const headers = await authHeaders();
+  if (!headers.Authorization) return false;
+  try {
+    const r = await fetch(`${API_URL}/admin/me`, { headers });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+const adminChecks = new Map<string, Promise<boolean>>();
+
+/** Whether to show admin UI for this user — asked once per user per page load. */
+export function useIsAdmin(userId: string | undefined): boolean {
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    if (!userId) {
+      setIsAdmin(false);
+      return;
+    }
+    let active = true;
+    if (!adminChecks.has(userId)) adminChecks.set(userId, verifyAdmin());
+    adminChecks.get(userId)!.then((ok) => {
+      if (active) setIsAdmin(ok);
+    });
+    return () => {
+      active = false;
+    };
+  }, [userId]);
+  return isAdmin;
+}
+
+// ── ERROR MESSAGES ──
+function describeAuthError(err: AuthError): string {
+  if (isAuthRetryableFetchError(err)) {
+    return "Couldn't reach the sign-in server. Check your connection and try again.";
+  }
+  switch (err.code) {
+    // Supabase deliberately returns the same error for "no such account" and
+    // "wrong password", so the two can't (and shouldn't) be told apart.
+    case "invalid_credentials":
+      return "Incorrect email or password. No account yet? Sign up instead.";
+    case "email_not_confirmed":
+      return "Confirm your email first — check your inbox for the confirmation link.";
+    case "user_already_exists":
+    case "email_exists":
+      return "An account with this email already exists. Sign in instead.";
+    case "weak_password":
+      return err.message;
+    case "email_address_invalid":
+      return "That email address isn't valid.";
+    case "signup_disabled":
+    case "email_provider_disabled":
+      return "New sign-ups are currently disabled.";
+    case "over_request_rate_limit":
+    case "over_email_send_rate_limit":
+      return "Too many attempts. Wait a minute and try again.";
+  }
+  if (err.status === 429) return "Too many attempts. Wait a minute and try again.";
+  return err.message || "Something went wrong. Please try again.";
 }
 
 // ── AUTH MODAL ──
 interface AuthModalProps {
   mode: "signin" | "signup" | null;
   onClose: () => void;
-  onAuth: (user: AuthUser) => void;
+  /** Called once a session exists. The session itself reaches the app via useAuth(). */
+  onAuth: () => void;
   onSwitchMode?: (mode: "signin" | "signup") => void;
 }
 
@@ -98,85 +260,181 @@ export function AuthModal({ mode, onClose, onAuth, onSwitchMode }: AuthModalProp
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const panelRef = useDialog<HTMLDivElement>(!!mode, onClose);
+  const id = useId();
 
-  useEffect(() => { setEmail(""); setPassword(""); setName(""); setError(null); }, [mode]);
+  useEffect(() => {
+    setEmail("");
+    setPassword("");
+    setName("");
+    setError(null);
+    setNotice(null);
+  }, [mode]);
 
   const handle = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) return;
-    setLoading(true); setError(null);
+    setError(null);
+    setNotice(null);
+    if (!isSupabaseConfigured) {
+      setError("Sign-in is unavailable: Supabase isn't configured for this app.");
+      return;
+    }
+    setLoading(true);
     try {
-      let authError: string | null = null;
       if (mode === "signup") {
-        const { error: err } = await supabase.auth.signUp({
-          email, password,
-          options: { data: { name: name || email.split("@")[0] } },
+        const username = name || email.split("@")[0];
+        const { data, error: err } = await supabase.auth.signUp({
+          email,
+          password,
+          options: { data: { name: username } },
         });
-        authError = err?.message || null;
-        if (!authError) {
-          try {
-            await supabase.from("users").insert({
-              username: name || email.split("@")[0],
-              email, password_hash: "supabase_auth",
-            });
-          } catch { /* ignore */ }
+        if (err) {
+          setError(describeAuthError(err));
+          return;
+        }
+        // With email confirmation on, Supabase hides existing accounts by
+        // returning a user with no identities instead of an error.
+        if (data.user && data.user.identities?.length === 0) {
+          setError("An account with this email already exists. Sign in instead.");
+          return;
+        }
+        if (!data.session) {
+          setNotice(
+            `Almost there — we sent a confirmation link to ${email}. Click it, then sign in.`,
+          );
+          return;
         }
       } else {
         const { error: err } = await supabase.auth.signInWithPassword({ email, password });
-        authError = err?.message || null;
+        if (err) {
+          setError(describeAuthError(err));
+          return;
+        }
       }
-
-      if (authError && !authError.includes("fetch") && !authError.includes("placeholder")) {
-        setError(authError);
-      } else {
-        const u: AuthUser = { email, name: name || email.split("@")[0] };
-        setUser(u); onAuth(u);
-      }
-    } catch {
-      const u: AuthUser = { email, name: name || email.split("@")[0] };
-      setUser(u); onAuth(u);
-    } finally { setLoading(false); }
+      onAuth();
+    } catch (err) {
+      console.error("[WaveJack] auth failed:", err);
+      setError("Something went wrong — please try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <AnimatePresence>
       {mode && (
-        <motion.div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4"
-          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
-          <motion.div className="glass w-full max-w-md rounded-2xl p-8"
-            initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }}
-            onClick={(e) => e.stopPropagation()}>
-            <div className="mb-6 flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-white">{mode === "signin" ? "Welcome back" : "Create account"}</h2>
-              <button onClick={onClose} className="text-white/60 hover:text-white"><X size={20} /></button>
+        <motion.div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onClose}
+        >
+          <motion.div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`${id}-title`}
+            className="panel w-full max-w-md rounded-md p-8"
+            initial={{ y: 8 }}
+            animate={{ y: 0 }}
+            exit={{ y: 8 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="hairline-b mb-6 flex items-center justify-between pb-4">
+              <h2
+                id={`${id}-title`}
+                className="font-display text-2xl font-semibold text-foreground"
+              >
+                {mode === "signin" ? "Welcome back" : "Create account"}
+              </h2>
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X size={20} aria-hidden="true" />
+              </button>
             </div>
             <form onSubmit={handle} className="space-y-4">
               {mode === "signup" && (
-                <input type="text" placeholder="Username" value={name} onChange={(e) => setName(e.target.value)}
-                  className="w-full rounded-lg bg-white/5 border border-white/10 px-4 py-3 text-white placeholder:text-white/40 focus:border-purple focus:outline-none" />
+                <input
+                  aria-label="Username"
+                  autoComplete="username"
+                  type="text"
+                  placeholder="Username"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full rounded-sm border border-border bg-transparent px-4 py-3 text-foreground placeholder:text-muted-foreground focus:border-[var(--accent)] focus:outline-none"
+                />
               )}
               <div className="relative">
-                <Mail className="absolute left-3 top-3.5 h-5 w-5 text-white/40" />
-                <input type="email" required placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)}
-                  className="w-full rounded-lg bg-white/5 border border-white/10 pl-11 pr-4 py-3 text-white placeholder:text-white/40 focus:border-purple focus:outline-none" />
+                <Mail
+                  aria-hidden="true"
+                  className="absolute left-3 top-3.5 h-5 w-5 text-muted-foreground"
+                />
+                <input
+                  aria-label="Email"
+                  autoComplete="email"
+                  type="email"
+                  required
+                  placeholder="Email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full rounded-sm border border-border bg-transparent pl-11 pr-4 py-3 text-foreground placeholder:text-muted-foreground focus:border-[var(--accent)] focus:outline-none"
+                />
               </div>
               <div className="relative">
-                <Lock className="absolute left-3 top-3.5 h-5 w-5 text-white/40" />
-                <input type="password" required placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)}
-                  className="w-full rounded-lg bg-white/5 border border-white/10 pl-11 pr-4 py-3 text-white placeholder:text-white/40 focus:border-purple focus:outline-none" />
+                <Lock
+                  aria-hidden="true"
+                  className="absolute left-3 top-3.5 h-5 w-5 text-muted-foreground"
+                />
+                <input
+                  aria-label="Password"
+                  autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                  type="password"
+                  required
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full rounded-sm border border-border bg-transparent pl-11 pr-4 py-3 text-foreground placeholder:text-muted-foreground focus:border-[var(--accent)] focus:outline-none"
+                />
               </div>
-              {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-2 text-sm text-red-400">{error}</div>}
-              <button type="submit" disabled={loading}
-                className="w-full rounded-lg py-3 font-semibold text-white transition-transform hover:scale-[1.02] disabled:opacity-50"
-                style={{ background: "var(--gradient-purple)", boxShadow: "var(--shadow-glow-purple)" }}>
+              {error && (
+                <div
+                  role="alert"
+                  className="rounded-sm border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive"
+                >
+                  {error}
+                </div>
+              )}
+              {notice && (
+                <div
+                  role="status"
+                  className="rounded-sm border border-[var(--accent)]/30 px-4 py-2 text-sm text-foreground"
+                >
+                  {notice}
+                </div>
+              )}
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full rounded-sm bg-foreground py-3 font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+              >
                 {loading ? "Please wait…" : mode === "signin" ? "Sign In" : "Create Account"}
               </button>
             </form>
-            <p className="mt-4 text-center text-sm text-white/40">
+            <p className="mt-4 text-center text-sm text-muted-foreground">
               {mode === "signin" ? "No account? " : "Already have one? "}
-              <button className="text-white/70 underline hover:text-white"
-                onClick={() => onSwitchMode?.(mode === "signin" ? "signup" : "signin")}>
+              <button
+                type="button"
+                className="text-foreground underline underline-offset-2 hover:text-signal"
+                onClick={() => onSwitchMode?.(mode === "signin" ? "signup" : "signin")}
+              >
                 {mode === "signin" ? "Sign up free" : "Sign in"}
               </button>
             </p>
@@ -188,23 +446,65 @@ export function AuthModal({ mode, onClose, onAuth, onSwitchMode }: AuthModalProp
 }
 
 // ── LIMIT MODAL ──
-export function LimitModal({ open, onClose, onSignup }: { open: boolean; onClose: () => void; onSignup: () => void }) {
+export function LimitModal({
+  open,
+  onClose,
+  onSignup,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSignup: () => void;
+}) {
+  const panelRef = useDialog<HTMLDivElement>(open, onClose);
+  const id = useId();
   return (
     <AnimatePresence>
       {open && (
-        <motion.div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4"
-          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <motion.div className="glass w-full max-w-md rounded-2xl p-8 text-center"
-            initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }}>
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full" style={{ background: "var(--gradient-purple)" }}>
-              <span className="text-3xl">🎵</span>
+        <motion.div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+        >
+          <motion.div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`${id}-title`}
+            className="panel w-full max-w-md rounded-md p-8 text-center"
+            initial={{ y: 8 }}
+            animate={{ y: 0 }}
+            exit={{ y: 8 }}
+          >
+            <div
+              aria-hidden="true"
+              className="font-signal mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-border text-signal"
+            >
+              2/2
             </div>
-            <h2 className="mb-2 text-2xl font-bold text-white">You've used your 2 free identifies</h2>
-            <p className="mb-6 text-white/60">Sign up free for unlimited song identifications.</p>
+            <h2
+              id={`${id}-title`}
+              className="font-display mb-2 text-2xl font-semibold text-foreground"
+            >
+              You've used your 2 free identifies
+            </h2>
+            <p className="mb-6 text-muted-foreground">
+              Sign up free for unlimited song identifications.
+            </p>
             <div className="flex gap-3">
-              <button onClick={onClose} className="flex-1 rounded-lg border border-white/15 py-3 text-white hover:bg-white/5">Maybe later</button>
-              <button onClick={onSignup} className="flex-1 rounded-lg py-3 font-semibold text-white"
-                style={{ background: "var(--gradient-purple)", boxShadow: "var(--shadow-glow-purple)" }}>Sign up free</button>
+              <button
+                onClick={onClose}
+                className="flex-1 rounded-sm border border-border py-3 text-foreground hover:bg-white/[0.04]"
+              >
+                Maybe later
+              </button>
+              <button
+                data-autofocus
+                onClick={onSignup}
+                className="flex-1 rounded-sm bg-foreground py-3 font-semibold text-background hover:opacity-90"
+              >
+                Sign up free
+              </button>
             </div>
           </motion.div>
         </motion.div>
