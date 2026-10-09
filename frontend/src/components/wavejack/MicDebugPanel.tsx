@@ -148,7 +148,10 @@ export function MicDebugPanel({
         <dt>matched on round (audio it had)</dt>
         <dd className="text-foreground">
           {timing.round !== null
-            ? `round ${timing.round} · ${timing.audioChunks ?? "?"} s of audio`
+            ? `round ${timing.round} · ${timing.audioChunks ?? "?"} chunks` +
+              (timing.audioChunks !== null && timing.chunkMs
+                ? ` (~${((timing.audioChunks * timing.chunkMs) / 1000).toFixed(1)} s of audio)`
+                : "")
             : "—"}
         </dd>
       </dl>

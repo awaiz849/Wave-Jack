@@ -520,6 +520,13 @@ async def recognize_stream(websocket: WebSocket):
     round_chunks = 0  # chunks the running round covers
     round_timings: dict = {}
     scored_round = scored_chunks = 0  # the round behind `ranked`
+    scored_round_ms = 0.0  # how long that round took
+
+    def debug_info() -> dict:
+        # Diagnostics only (the dev mic panel and ws_stream_harness read them): the
+        # round behind the answer, how many chunks it had (chunk length is up to the
+        # client), and how long it took. The round number is also the round count.
+        return {"round": scored_round, "audio_chunks": scored_chunks, "round_ms": round(scored_round_ms)}
 
     async def send_match(best: tuple[int, int], how: str) -> None:
         result = await asyncio.to_thread(song_result, best[1], best[0], runner_up(ranked, best[1]))
@@ -529,9 +536,7 @@ async def recognize_stream(websocket: WebSocket):
             {
                 "status": "match",
                 "result": result,
-                # Diagnostics only (the dev mic panel shows them): which round matched,
-                # and how many 1-second chunks of audio it had.
-                "debug": {"round": scored_round, "audio_chunks": scored_chunks},
+                "debug": debug_info(),
             }
         )
         await asyncio.sleep(1.5)
@@ -569,6 +574,7 @@ async def recognize_stream(websocket: WebSocket):
                         return
                 scored_bytes = round_bytes
                 scored_round, scored_chunks = round_no, round_chunks
+                scored_round_ms = (time.perf_counter() - round_timings["started"]) * 1000
                 round_task = None
                 rt = round_timings
                 print(
@@ -612,7 +618,7 @@ async def recognize_stream(websocket: WebSocket):
             await send_match(best, "final")
         else:
             print(f"No match at {time.perf_counter() - t0:.1f}s (best {ranked[0][0] if ranked else 0} votes)")
-            await websocket.send_json({"status": "no_match"})
+            await websocket.send_json({"status": "no_match", "debug": debug_info()})
             await asyncio.sleep(1.5)
             await _close_quietly(websocket)
 

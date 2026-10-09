@@ -54,7 +54,7 @@ def stream_pieces(webm: bytes, timeslice: float) -> list[bytes]:
 
 async def one_trial(url: str, pieces: list[bytes], timeslice: float) -> dict:
     t0 = time.perf_counter()
-    first = {"status": None, "title": None, "song_id": None, "at": None}
+    first = {"status": None, "title": None, "song_id": None, "at": None, "debug": None}
     async with websockets.connect(f"{url}/ws/recognize", max_size=None) as ws:
         async def sender():
             for i, piece in enumerate(pieces):
@@ -75,6 +75,7 @@ async def one_trial(url: str, pieces: list[bytes], timeslice: float) -> dict:
                     first["at"] = time.perf_counter() - t0
                     res = msg.get("result") or {}
                     first["title"], first["song_id"] = res.get("title") or msg.get("detail"), res.get("song_id")
+                    first["debug"] = msg.get("debug")  # rounds / round_ms (backend diagnostics)
                     return
 
         send_task = asyncio.create_task(sender())
@@ -142,6 +143,63 @@ async def run(a):
           f"{statistics.median(times) if times else float('nan'):.1f}s")
 
 
+async def run_accuracy_set(a):
+    """
+    Same clips as `recognition_harness.py accuracy` (start / middle / end x clean,
+    20 dB SNR, 10 dB SNR at -12 dB), streamed in `--timeslice` pieces. --extra files
+    must match their song; --unknown files must get no match.
+    """
+    songs = [(p, int(sid)) for p, sid in (s.rsplit("=", 1) for s in a.extra)] + [(p, None) for p in a.unknown]
+    rows = []
+    print(f"url={a.url} timeslice={a.timeslice}s, {len(songs)} files, accuracy clip set")
+    for path, sid in songs:
+        dur = rh.ffprobe_duration(path)
+        name = rh.title(sid) if sid is not None else f"{os.path.basename(path)[:28]} (not in library)"
+        for pos, start in rh.clip_starts(dur, RECORD_SECONDS):
+            for ci, (cond, gain, snr) in enumerate(rh.ACCURACY_CONDITIONS):
+                seed = (sid or 0) * 1000 + int(start) * 10 + ci  # same audio as the accuracy suite
+                clip = rh.make_clip(path, start, RECORD_SECONDS, gain, snr, "webm", seed=seed)
+                try:
+                    pieces = stream_pieces(open(clip, "rb").read(), a.timeslice)
+                finally:
+                    os.unlink(clip)
+                r = await one_trial(a.url, pieces, a.timeslice)
+                if sid is None:
+                    outcome = "rejected" if r["status"] == "no_match" else ("FALSE POSITIVE" if r["status"] == "match" else r["status"])
+                else:
+                    outcome = ("match" if r["song_id"] == sid else "WRONG SONG") if r["status"] == "match" else (r["status"] or "none")
+                dbg = r["debug"] or {}
+                rows.append({"sid": sid, "pos": pos, "cond": cond, "outcome": outcome, "at": r["at"],
+                             "rounds": dbg.get("round"), "round_ms": dbg.get("round_ms"),
+                             "chunks": dbg.get("audio_chunks"), "pieces": len(pieces)})
+                at = f"{r['at']:5.1f}s" if r["at"] is not None else "  -  "
+                print(f"  {name[:34]:34s} {pos:6s} {cond:18s} -> {outcome:14s} at {at}  "
+                      f"rounds {dbg.get('round')}  last round {dbg.get('round_ms')} ms "
+                      f"({dbg.get('audio_chunks')}/{len(pieces)} chunks)", flush=True)
+
+    known = [r for r in rows if r["sid"] is not None]
+    unknown = [r for r in rows if r["sid"] is None]
+    times = sorted(r["at"] for r in known if r["outcome"] == "match")
+    rounds = [r["rounds"] for r in rows if r["rounds"]]
+    # Rounds that scored (nearly) the whole 10 s buffer: the final round of a no-match stream.
+    full = [r["round_ms"] for r in rows if r["round_ms"] and r["chunks"] and r["chunks"] >= r["pieces"] - 1]
+    print(f"\n================ SUMMARY (timeslice {a.timeslice}s) ================")
+    print(f"  correct {sum(r['outcome'] == 'match' for r in known)}/{len(known)}  "
+          f"wrong song {sum(r['outcome'] == 'WRONG SONG' for r in known)}  "
+          f"no match {sum(r['outcome'] == 'no_match' for r in known)}")
+    if times:
+        print(f"  time to first correct match: median {statistics.median(times):.2f}s  "
+              f"mean {statistics.mean(times):.2f}s  max {times[-1]:.2f}s")
+    print(f"  not in library: rejected {sum(r['outcome'] == 'rejected' for r in unknown)}/{len(unknown)}  "
+          f"false positives {sum(r['outcome'] == 'FALSE POSITIVE' for r in unknown)}")
+    if rounds:
+        print(f"  match rounds per recording: median {statistics.median(rounds):.0f}  mean {statistics.mean(rounds):.1f}"
+              f"  max {max(rounds)}")
+    if full:
+        print(f"  round duration with the full 10 s buffer: median {statistics.median(full):.0f} ms  "
+              f"max {max(full)} ms  ({len(full)} rounds)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="ws://127.0.0.1:8000")
@@ -150,7 +208,12 @@ def main():
     ap.add_argument("--extra", action="append", default=[], metavar="FILE=ID")
     ap.add_argument("--step", type=float, default=20.0)
     ap.add_argument("--clips-per-song", type=int, default=6)
-    asyncio.run(run(ap.parse_args()))
+    ap.add_argument("--accuracy-set", action="store_true",
+                    help="start/middle/end x 3 conditions per --extra file (like recognition_harness accuracy)")
+    ap.add_argument("--unknown", action="append", default=[], metavar="FILE",
+                    help="with --accuracy-set: a file NOT in the library (expected: no match)")
+    a = ap.parse_args()
+    asyncio.run(run_accuracy_set(a) if a.accuracy_set else run(a))
 
 
 if __name__ == "__main__":

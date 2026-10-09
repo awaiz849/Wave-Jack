@@ -8,7 +8,8 @@ export type MicDebugTiming = {
   finalAt: number | null; // match / no_match / error received
   outcome: string | null;
   round: number | null; // backend round that produced the match
-  audioChunks: number | null; // 1-second chunks that round had
+  audioChunks: number | null; // MediaRecorder pieces that round had
+  chunkMs: number | null; // length of one piece (the recorder's timeslice)
 };
 
 export const EMPTY_TIMING: MicDebugTiming = {
@@ -19,4 +20,5 @@ export const EMPTY_TIMING: MicDebugTiming = {
   outcome: null,
   round: null,
   audioChunks: null,
+  chunkMs: null,
 };

@@ -69,6 +69,10 @@ const PIPELINE_STEPS = [
 ];
 
 const RECORD_SECONDS = 10;
+// MediaRecorder timeslice: how often a piece of audio is sent to the backend. The
+// backend starts a match round as soon as audio arrives (one round at a time per
+// connection; pieces that arrive mid-round are folded into the next round).
+const CHUNK_MS = 500; // measured: 500 ms beat 1000 ms and 300 ms on time to first match
 // No match by the end of the normal recording: keep recording (the backend keeps
 // matching every new chunk) for up to this many more seconds before giving up.
 const EXTRA_SECONDS = 10;
@@ -231,7 +235,7 @@ function WaveJack() {
     if (!checkLimit()) return;
     if (DEV) {
       debugTimingRef.current = EMPTY_TIMING;
-      markTiming({ tapAt: performance.now() });
+      markTiming({ tapAt: performance.now(), chunkMs: CHUNK_MS });
     }
     matchFoundRef.current = false;
     waitingForResultRef.current = false;
@@ -383,10 +387,9 @@ function WaveJack() {
         };
       }
 
-      // Send audio every second: the backend matches as soon as each piece lands
-      // and answers early once the evidence is clear (measured: median 4.3 s vs
-      // 5.3 s with 2 s pieces, same accuracy). Recording still stops at 10 s.
-      recorder.start(1000);
+      // Send audio every CHUNK_MS: the backend matches as soon as each piece lands
+      // and answers early once the evidence is clear. Recording still stops at 10 s.
+      recorder.start(CHUNK_MS);
       setState("listening");
       startSilenceCheck(stream);
 
