@@ -55,7 +55,6 @@ rich==14.3.3
 scikit-learn==1.8.0
 scipy==1.17.1
 six==1.17.0
-sounddevice==0.5.5
 soundfile==0.13.1
 soxr==1.0.0
 standard-aifc==3.13.0

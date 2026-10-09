@@ -14,7 +14,6 @@ from database import (
     match_candidates,
     get_song_by_id
 )
-from record import record_clip
 from fastapi import WebSocket, WebSocketDisconnect
 from recognizer import (
     fingerprint_buffer,
@@ -310,28 +309,6 @@ def _song_form_docs(file_field: str) -> dict:
 @app.post("/recognize")
 def recognize_upload(file: UploadFile = File(...)):
     return _recognize_upload(file)
-
-
-# ─────────────────────────────────────────────
-# POST /recognize/record — record from the SERVER's mic, then recognize
-# (admin only: it uses the machine running the API, not the visitor's mic)
-# ─────────────────────────────────────────────
-
-@app.post("/recognize/record")
-def recognize_from_mic(duration: int = 10, _: CurrentUser = Depends(require_admin)):
-    """
-    Records audio from the server's microphone for `duration` seconds,
-    fingerprints it, and returns the matching song.
-    """
-    if not 1 <= duration <= 30:
-        raise HTTPException(422, "duration must be between 1 and 30 seconds")
-    clip_path = record_clip(duration=duration)
-
-    try:
-        return run_recognition(clip_path)
-    finally:
-        if os.path.exists(clip_path):
-            os.unlink(clip_path)
 
 
 # ─────────────────────────────────────────────

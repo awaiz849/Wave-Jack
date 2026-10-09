@@ -210,3 +210,14 @@ __marimo__/
 .claude/
 .vscode/
 screenshots/
+
+# Audio files (library songs and test clips stay local, never in git)
+data/songs/
+*.mp3
+*.m4a
+*.wav
+*.webm
+
+# Environment variants (.env.production, .env.local, ...) — only the examples are committed
+.env.*
+!.env.example

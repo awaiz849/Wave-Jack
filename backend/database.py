@@ -354,38 +354,3 @@ def store_song_with_fingerprints(
     song_id = store_song(title, artist, filename, youtube_url)
     store_fingerprints(hashes, song_id)
     return song_id
-
-
-# ─────────────────────────────────────────────
-# QUICK TEST
-# ─────────────────────────────────────────────
-
-if __name__ == "__main__":
-    import sys
-    sys.path.append("..")
-    from fingerprint import fingerprint
-
-    test_file = "../data/songs/test6.mp3"
-
-    print("Fingerprinting...")
-    hashes = fingerprint(test_file)
-    print(f"Got {len(hashes)} hashes")
-
-    print("\nStoring in Supabase...")
-    song_id = store_song_with_fingerprints(
-        title="Test Song",
-        artist="Test Artist",
-        filename="test6.mp3",
-        hashes=hashes,
-        youtube_url=None
-    )
-
-    print(f"\nVerifying — fetching song id={song_id}")
-    song = get_song_by_id(song_id)
-    print(f"Found: {song}")
-
-    print(f"\nVerifying — querying first 5 hashes back")
-    sample_hashes = [h[0] for h in hashes[:5]]
-    results = query_fingerprints(sample_hashes)
-    print(f"Got {len(results)} matching rows")
-    print(results[:3])

@@ -1,46 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, useInView, useReducedMotion } from "framer-motion";
 
-/**
- * The one recurring visual idea in this design: a waveform trace that
- * resolves into a fingerprint swirl — "sound becomes a fingerprint." Used as
- * hero art on the landing page. Flat, thin single-stroke linework only — no
- * fill, no blur, no glow, matching the rest of the minimal system.
- */
-export function WaveformFingerprint({ className = "" }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 560 260"
-      fill="none"
-      className={className}
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-    >
-      <path
-        d="M0 130 H60 L75 90 L90 170 L105 60 L120 200 L135 100 L150 160 L165 130 H210"
-        stroke="var(--accent)"
-        strokeWidth="1.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="none"
-      />
-      {Array.from({ length: 11 }, (_, i) => {
-        const r = 18 + i * 11;
-        return (
-          <path
-            key={i}
-            d={`M ${380 - r} 130 A ${r} ${r * 0.86} 0 1 1 ${380 + r} 130 A ${r} ${r * 0.86} 0 1 1 ${380 - r} 130`}
-            stroke="var(--accent)"
-            strokeWidth="1.5"
-            fill="none"
-            opacity={0.35 + i * 0.055}
-          />
-        );
-      })}
-    </svg>
-  );
-}
-
 const BARS = 28;
 const idleBars = () => Array.from({ length: BARS }, (_, i) => 0.12 + ((i * 7) % 5) * 0.02);
 

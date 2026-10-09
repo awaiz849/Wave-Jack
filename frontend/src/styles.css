@@ -78,7 +78,6 @@
   --gradient-icon: linear-gradient(135deg, #a855f7, #ec4899);
 
   /* Glows and elevation. Kept small: big blurred shadows are slow to paint on phones. */
-  --glow-violet: 0 0 20px -6px rgb(168 85 247 / 0.3);
   --glow-pink: 0 0 16px -4px rgb(236 72 153 / 0.35);
   --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 12px 24px -16px rgb(0 0 0 / 0.8);
 
@@ -184,9 +183,6 @@
   }
   .bg-gradient-icon {
     background: var(--gradient-icon);
-  }
-  .glow-violet {
-    box-shadow: var(--glow-violet);
   }
   .glow-pink {
     box-shadow: var(--glow-pink);
