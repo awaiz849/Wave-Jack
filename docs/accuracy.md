@@ -1,6 +1,6 @@
 # WaveJack recognition accuracy
 
-Run on 2026-10-09 07:12 against the live library (7 songs) at commit `cfca45b` (plus uncommitted working-tree changes). Total run time 3.2 min, 126 recognitions.
+Run on 2026-10-09 18:04 against the live library (14 songs) at commit `68f4c89` (plus uncommitted working-tree changes). Total run time 5.0 min, 252 recognitions.
 
 Produced by `scripts/recognition_harness.py accuracy`. The harness calls the backend's own functions (the same code the API runs); no matching, fingerprint or backend code was changed.
 
@@ -26,16 +26,23 @@ Each cell is `/identify · WebSocket` matches out of 3 clips.
 | Song | clean | 20 dB SNR | 10 dB SNR, -12 dB | Median time to match (/identify · WS) |
 |---|---|---|---|---|
 | 1. Love Me Love Me / Sajid-Wajid | not tested | not tested | not tested | not tested (no source file) |
-| 2. Tumhe JO Maine Dekha / Abhijeet | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 1.4 s · 1.3 s |
-| 3. Bebo main Bebo / Alisha Chinai | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 1.0 s · 1.1 s |
-| 4. Ladki Badi Anjani Hai / Kumar Sanu | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 1.1 s · 1.1 s |
-| 5. Mujhko Yaad Sataye Teri / Himesh Reshmmiya | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 1.2 s · 1.3 s |
-| 6. Choomantar / Benny Dayal | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 1.0 s · 1.2 s |
-| 7. Callin U / Elyanna | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 1.0 s · 1.1 s |
-| **Total (6 songs)** | **18/18 · 18/18** | **18/18 · 18/18** | **18/18 · 18/18** | **1.1 s · 1.2 s** |
+| 2. Tumhe JO Maine Dekha / Abhijeet | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 1.2 s · 1.2 s |
+| 3. Bebo main Bebo / Alisha Chinai | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 0.8 s · 1.2 s |
+| 4. Ladki Badi Anjani Hai / Kumar Sanu | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 1.0 s · 0.9 s |
+| 5. Mujhko Yaad Sataye Teri / Himesh Reshmmiya | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 1.0 s · 1.0 s |
+| 6. Choomantar / Benny Dayal | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 0.9 s · 1.0 s |
+| 7. Callin U / Elyanna | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 0.8 s · 1.0 s |
+| 8. Haule Haule / Sukhwinder Singh | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 0.9 s · 1.0 s |
+| 9. Isq Risk / Rahat Fateh Ali  | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 0.9 s · 0.8 s |
+| 10. Zaalima | Raees | Shah Rukh  / Arijit Singh & H | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 0.9 s · 1.0 s |
+| 11. For A Reason / Karan Aujla | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 0.8 s · 1.0 s |
+| 14. Despacito / Luis Fonsi | 2/3 · 2/3 | 2/3 · 2/3 | 2/3 · 2/3 | 0.8 s · 0.9 s |
+| 15. Baby Calm Down / Selena Gomez & R | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 0.9 s · 0.9 s |
+| 16. MILLIONAIRE / YO YO HONEY SING | 3/3 · 3/3 | 3/3 · 3/3 | 3/3 · 3/3 | 0.8 s · 0.9 s |
+| **Total (13 songs)** | **38/39 · 38/39** | **38/39 · 38/39** | **38/39 · 38/39** | **0.9 s · 1.0 s** |
 
-- /identify overall: 54/54 (100%)
-- WebSocket overall: 54/54 (100%)
+- /identify overall: 114/117 (97%)
+- WebSocket overall: 114/117 (97%)
 
 ## Wrong matches and false positives
 
@@ -45,11 +52,11 @@ Not-in-library check: `Amit_Kumar;Sonu_Nigam;Alka_Yagnik;Udit_Narayan;Kavita_Kri
 
 ## Misses
 
-None.
-## Notes
-
-- **Margins.** A match needs at least 15 votes (`MIN_MATCH_VOTES`). The lowest winning score in this run was **16 votes** (Mujhko Yaad Sataye Teri, *start* clip, 10 dB SNR / −12 dB, WebSocket path), and every result under 40 votes came from a *start* clip (Tumhe Jo Maine Dekha, Mujhko Yaad Sataye Teri, Choomantar). Middle and end clips scored roughly 130–470 votes. Song intros are the weak spot: one more step of noise there would probably turn these into misses (not wrong answers).
-- **Wrong-song votes stayed low.** The best wrong song never got more than 10 votes on any library clip, and at most 4 on the not-in-library song, so there is a clear gap below the 15-vote threshold.
-- **Sample size.** 6 songs × 3 clips is a small sample; 100% here means "no failures seen", not a guaranteed rate.
-- **First-call latency.** The very first recognition took 28.5 s (cold database connection); it is included in the medians but barely moves them.
-- **Not covered:** song 1 (no source file), real microphone recordings (room echo, speaker colouring), and the live WebSocket's early-stop timing.
+| Clip | Condition | Path | Votes for the true song | Best other song |
+|---|---|---|---|---|
+| Despacito / Luis Fonsi @ 5s (start) | clean | identify | 12 | 4 (Mujhko Yaad Sataye Teri / Himesh Reshmmiya) |
+| Despacito / Luis Fonsi @ 5s (start) | clean | ws | 10 | 4 (Mujhko Yaad Sataye Teri / Himesh Reshmmiya) |
+| Despacito / Luis Fonsi @ 5s (start) | 20 dB SNR | identify | 12 | 5 (Mujhko Yaad Sataye Teri / Himesh Reshmmiya) |
+| Despacito / Luis Fonsi @ 5s (start) | 20 dB SNR | ws | 10 | 5 (Mujhko Yaad Sataye Teri / Himesh Reshmmiya) |
+| Despacito / Luis Fonsi @ 5s (start) | 10 dB SNR, -12 dB | identify | 11 | 4 (Zaalima | Raees | Shah Rukh  / Arijit Singh & H) |
+| Despacito / Luis Fonsi @ 5s (start) | 10 dB SNR, -12 dB | ws | 8 | 3 (Love Me Love Me / Sajid-Wajid) |
