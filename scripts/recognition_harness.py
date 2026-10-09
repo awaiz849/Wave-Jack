@@ -16,6 +16,7 @@ Run from the repo root with the backend venv:
   backend\\venv\\Scripts\\python scripts\\recognition_harness.py suite
   backend\\venv\\Scripts\\python scripts\\recognition_harness.py clip data/songs/test2.mp3 --start 60 --snr 5 --format webm
   backend\\venv\\Scripts\\python scripts\\recognition_harness.py params data/songs/test.mp3
+  backend\\venv\\Scripts\\python scripts\\recognition_harness.py accuracy --extra "song.mp3=2" --unknown other.mp3
 """
 
 import argparse
@@ -436,6 +437,202 @@ def cmd_suite(a):
                       f"  | lowest when it beat every wrong song: {matched[0] if matched else '-'}")
 
 
+# ─────────────────────────────────────────────
+# Accuracy report (start / middle / end clips, three conditions, docs/accuracy.md)
+# ─────────────────────────────────────────────
+
+# (label, volume change dB, SNR dB or None). Noise is added AFTER the volume
+# change, so the SNR is measured against the already-quieter signal.
+ACCURACY_CONDITIONS = [
+    ("clean", 0, None),
+    ("20 dB SNR", 0, 20),
+    ("10 dB SNR, -12 dB", -12, 10),
+]
+ACCURACY_PATHS = [("identify", "/identify"), ("ws", "WebSocket")]
+
+
+def clip_starts(dur, clip_len):
+    """Start, middle and near-the-end positions (seconds)."""
+    return [
+        ("start", 5.0),
+        ("middle", max(0.0, dur / 2 - clip_len / 2)),
+        ("end", max(0.0, dur - clip_len - 10.0)),
+    ]
+
+
+def _median(xs):
+    xs = sorted(xs)
+    if not xs:
+        return None
+    m = len(xs) // 2
+    return xs[m] if len(xs) % 2 else (xs[m - 1] + xs[m]) / 2
+
+
+def cmd_accuracy(a):
+    songs = []  # (path, expected id or None for "not in library")
+    for spec in a.extra:
+        path, sid = spec.rsplit("=", 1)
+        songs.append((path, int(sid)))
+    for path in a.unknown:
+        songs.append((path, None))
+    lib = library()
+    tested_ids = {sid for _, sid in songs if sid is not None}
+
+    trials = []  # dicts, one per (file, position, condition, path)
+    t_start = time.time()
+    for path, sid in songs:
+        dur = ffprobe_duration(path)
+        name = title(sid) if sid is not None else f"{os.path.basename(path)} (not in library)"
+        print(f"\n== {name}  ({dur:.0f}s)", flush=True)
+        for pos, start in clip_starts(dur, a.duration):
+            for ci, (cond, gain, snr) in enumerate(ACCURACY_CONDITIONS):
+                # Same seed for a clip across runs, different per clip/condition.
+                seed = (sid or 0) * 1000 + int(start) * 10 + ci
+                clip = make_clip(path, start, a.duration, gain, snr, "webm", seed=seed)
+                try:
+                    for p, _ in ACCURACY_PATHS:
+                        res = run_identify(clip) if p == "identify" else run_ws(clip)
+                        got = answer_id(res)
+                        if sid is None:
+                            outcome = "correct (no match)" if got is None else "FALSE POSITIVE"
+                        else:
+                            outcome = "match" if got == sid else ("miss" if got is None else "WRONG SONG")
+                        top = res["candidates"][:2]
+                        trials.append({
+                            "file": os.path.basename(path), "sid": sid, "name": name, "pos": pos,
+                            "start": start, "cond": cond, "path": p, "got": got, "outcome": outcome,
+                            "secs": res["secs"], "top": top,
+                        })
+                        print(f"  {pos:6s} {start:6.1f}s  {cond:18s} {p:8s} -> {outcome:18s} "
+                              f"[{res['secs']:.1f}s]  top: "
+                              + ", ".join(f"{n}v {title(s)}" for n, s, _ in top), flush=True)
+                finally:
+                    os.unlink(clip)
+    elapsed = time.time() - t_start
+    write_accuracy_md(a, trials, lib, tested_ids, elapsed)
+
+
+def write_accuracy_md(a, trials, lib, tested_ids, elapsed):
+    def rate(rows):
+        hits = sum(r["outcome"] == "match" for r in rows)
+        return f"{hits}/{len(rows)}" if rows else "—"
+
+    def secs(rows):
+        m = _median([r["secs"] for r in rows if r["outcome"] == "match"])
+        return f"{m:.1f} s" if m is not None else "—"
+
+    def cell(rows, cond):
+        by = {p: [r for r in rows if r["cond"] == cond and r["path"] == p] for p, _ in ACCURACY_PATHS}
+        return f"{rate(by['identify'])} · {rate(by['ws'])}"
+
+    known = [r for r in trials if r["sid"] is not None]
+    unknown = [r for r in trials if r["sid"] is None]
+    conds = [c for c, *_ in ACCURACY_CONDITIONS]
+    try:
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True,
+                                text=True).stdout.strip()
+    except Exception:
+        commit = "?"
+
+    L = []
+    L.append("# WaveJack recognition accuracy\n")
+    L.append(f"Run on {time.strftime('%Y-%m-%d %H:%M')} against the live library "
+             f"({len(lib)} songs) at commit `{commit}` (plus uncommitted working-tree changes). "
+             f"Total run time {elapsed / 60:.1f} min, {len(trials)} recognitions.\n")
+    L.append("Produced by `scripts/recognition_harness.py accuracy`. The harness calls the backend's own "
+             "functions (the same code the API runs); no matching, fingerprint or backend code was changed.\n")
+
+    L.append("## Method\n")
+    L.append(f"- **Clips:** 3 per song, {a.duration:.0f} s each: *start* (from 5 s, skipping any silent "
+             "intro), *middle* (centred on the midpoint), *end* (finishing 10 s before the end of the track). "
+             "Decoded with ffmpeg to mono 44.1 kHz float.")
+    L.append("- **Conditions:**")
+    L.append("  - *clean*: the clip as decoded.")
+    L.append("  - *20 dB SNR*: white noise added at 20 dB signal-to-noise ratio.")
+    L.append("  - *10 dB SNR, −12 dB*: volume lowered by 12 dB first, then white noise added at 10 dB SNR "
+             "relative to the quieter signal.")
+    L.append("- **Noise:** Gaussian white noise (`numpy.random.default_rng(seed).standard_normal`, flat spectrum "
+             "across the whole band), scaled so that RMS(signal) / RMS(noise) = 10^(SNR/20), where the signal RMS "
+             "is measured over the whole 10 s clip. The result is clipped to [−1, 1]. The seed is fixed per clip and "
+             "condition, so a rerun produces identical audio.")
+    L.append("- **Encoding:** every clip is then encoded as Opus in WebM at 128 kb/s, the format the browser's "
+             "MediaRecorder uploads, and the same file goes through both paths.")
+    L.append("- **Paths:**")
+    L.append("  - */identify*: `main.convert_to_wav` → `main.run_recognition`, the file-upload endpoint.")
+    L.append("  - *WebSocket*: `recognizer.fingerprint_buffer` → `recognizer.query_hashes` on the whole 10 s "
+             "buffer, i.e. the WebSocket's final full-buffer lookup. The live WebSocket can answer earlier from "
+             "partial chunks; that early-stop timing is not measured here.")
+    L.append("- **Time to match:** wall-clock seconds from handing the clip to the backend function until it "
+             "answers (decode + fingerprint + database lookup + voting), median over matched clips only. It does "
+             "not include the 10 s of recording.")
+    L.append("- **Outcomes:** *match* = right song; *miss* = no answer (backend said no match); "
+             "*wrong song* = a different library song was returned.\n")
+
+    L.append("## Results\n")
+    L.append("Each cell is `/identify · WebSocket` matches out of 3 clips.\n")
+    L.append("| Song | " + " | ".join(conds) + " | Median time to match (/identify · WS) |")
+    L.append("|---|" + "---|" * len(conds) + "---|")
+    for sid in sorted(lib):
+        name = title(sid)
+        if sid not in tested_ids:
+            L.append(f"| {sid}. {name} | " + " | ".join("not tested" for _ in conds)
+                     + " | not tested (no source file) |")
+            continue
+        rows = [r for r in known if r["sid"] == sid]
+        t = f"{secs([r for r in rows if r['path'] == 'identify'])} · {secs([r for r in rows if r['path'] == 'ws'])}"
+        L.append(f"| {sid}. {name} | " + " | ".join(cell(rows, c) for c in conds) + f" | {t} |")
+    t = f"{secs([r for r in known if r['path'] == 'identify'])} · {secs([r for r in known if r['path'] == 'ws'])}"
+    L.append(f"| **Total ({len(tested_ids)} songs)** | " + " | ".join(f"**{cell(known, c)}**" for c in conds)
+             + f" | **{t}** |")
+    L.append("")
+    for p, label in ACCURACY_PATHS:
+        rows = [r for r in known if r["path"] == p]
+        pct = 100 * sum(r["outcome"] == "match" for r in rows) / max(1, len(rows))
+        L.append(f"- {label} overall: {rate(rows)} ({pct:.0f}%)")
+    L.append("")
+
+    L.append("## Wrong matches and false positives\n")
+    wrong = [r for r in known if r["outcome"] == "WRONG SONG"]
+    fps = [r for r in unknown if r["outcome"] == "FALSE POSITIVE"]
+    if unknown:
+        files = sorted({r["file"] for r in unknown})
+        L.append("Not-in-library check: " + ", ".join(f"`{f}`" for f in files)
+                 + f" (\"Bole Chudiyan\"), {len(unknown)} recognitions, expected answer: no match. "
+                 f"Correctly rejected: {sum(r['outcome'] != 'FALSE POSITIVE' for r in unknown)}/{len(unknown)}.\n")
+    if not wrong and not fps:
+        L.append("**None.** No clip was identified as a different library song, and the not-in-library song "
+                 "was never matched to anything.\n")
+    else:
+        L.append("| Clip | Condition | Path | Expected | Returned |")
+        L.append("|---|---|---|---|---|")
+        for r in wrong + fps:
+            exp = title(r["sid"]) if r["sid"] is not None else "no match"
+            L.append(f"| {r['name']} @ {r['start']:.0f}s ({r['pos']}) | {r['cond']} | {r['path']} | {exp} "
+                     f"| {title(r['got'])} |")
+        L.append("")
+
+    L.append("## Misses\n")
+    misses = [r for r in known if r["outcome"] == "miss"]
+    if not misses:
+        L.append("None.\n")
+    else:
+        L.append("| Clip | Condition | Path | Votes for the true song | Best other song |")
+        L.append("|---|---|---|---|---|")
+        for r in misses:
+            true_v = next((n for n, s, _ in r["top"] if s == r["sid"]), None)
+            other = next(((n, s) for n, s, _ in r["top"] if s != r["sid"]), None)
+            L.append(f"| {r['name']} @ {r['start']:.0f}s ({r['pos']}) | {r['cond']} | {r['path']} | "
+                     f"{true_v if true_v is not None else '<top 2'} | "
+                     f"{f'{other[0]} ({title(other[1])})' if other else '—'} |")
+        L.append("")
+
+    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "accuracy.md")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(L))
+    print(f"\nwrote {os.path.normpath(out)}")
+
+
 def cmd_params(a):
     """Suspect 4: does the query pipeline produce the same fingerprints the DB stored?"""
     sid = song_id_for_file(a.file)
@@ -508,11 +705,18 @@ def main_cli():
     s.add_argument("--path", choices=["identify", "ws", "both"], default="both")
     s.add_argument("-v", "--verbose", action="store_true", help="print every trial, not just misses")
 
+    r = sub.add_parser("accuracy", help="start/middle/end clips x 3 conditions x both paths -> docs/accuracy.md")
+    r.add_argument("--extra", action="append", default=[], metavar="FILE=ID",
+                   help="audio file and its library song id (repeatable)")
+    r.add_argument("--unknown", action="append", default=[], metavar="FILE",
+                   help="audio file NOT in the library; expected answer is no match (repeatable)")
+    r.add_argument("--duration", type=float, default=10.0)
+
     p = sub.add_parser("params", help="compare stored fingerprints with what the query pipeline computes")
     p.add_argument("file")
 
     a = ap.parse_args()
-    {"clip": cmd_clip, "suite": cmd_suite, "params": cmd_params}[a.cmd](a)
+    {"clip": cmd_clip, "suite": cmd_suite, "params": cmd_params, "accuracy": cmd_accuracy}[a.cmd](a)
 
 
 if __name__ == "__main__":
