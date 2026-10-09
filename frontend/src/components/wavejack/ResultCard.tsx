@@ -69,7 +69,7 @@ export function ResultCard({ result }: { result: MatchResult }) {
       aria-label="Match result"
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      className="panel panel-edge glow-violet mt-4 max-w-sm rounded-[var(--radius)] p-5"
+      className="panel panel-edge mt-4 max-w-sm rounded-[var(--radius)] p-5"
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-signal text-sm text-signal">matched</span>

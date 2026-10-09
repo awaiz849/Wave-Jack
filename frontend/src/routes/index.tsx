@@ -19,6 +19,7 @@ import {
 import { RecentSearches, artFor, type Track } from "@/components/wavejack/RecentSearches";
 import { ResultCard } from "@/components/wavejack/ResultCard";
 import { MicDebugPanel, type MicDebugSent } from "@/components/wavejack/MicDebugPanel";
+import { EMPTY_TIMING, type MicDebugTiming } from "@/lib/mic-debug-timing";
 import {
   MicPicker,
   loadMicChoice,
@@ -107,6 +108,12 @@ function WaveJack() {
   const [debugSent, setDebugSent] = useState<MicDebugSent>({ chunks: 0, bytes: 0, mimeType: "" });
   const [debugUrl, setDebugUrl] = useState<string | null>(null);
   const debugChunksRef = useRef<Blob[]>([]);
+  const [debugTiming, setDebugTiming] = useState<MicDebugTiming>(EMPTY_TIMING);
+  const debugTimingRef = useRef<MicDebugTiming>(EMPTY_TIMING); // read inside socket handlers
+  const markTiming = (patch: Partial<MicDebugTiming>) => {
+    debugTimingRef.current = { ...debugTimingRef.current, ...patch };
+    setDebugTiming(debugTimingRef.current);
+  };
   // Microphone choice ("" = system default), saved in localStorage.
   const [micId, setMicId] = useState("");
   const { devices: micDevices, refresh: refreshMics } = useAudioInputs();
@@ -222,6 +229,10 @@ function WaveJack() {
   // ── START MIC RECORDING ──
   const startListening = async () => {
     if (!checkLimit()) return;
+    if (DEV) {
+      debugTimingRef.current = EMPTY_TIMING;
+      markTiming({ tapAt: performance.now() });
+    }
     matchFoundRef.current = false;
     waitingForResultRef.current = false;
     extendedRef.current = false;
@@ -289,6 +300,18 @@ function WaveJack() {
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
+        if (DEV) {
+          const now = performance.now();
+          if (debugTimingRef.current.firstReplyAt === null) markTiming({ firstReplyAt: now });
+          if (data.status === "match" || data.status === "no_match" || data.status === "error") {
+            markTiming({
+              finalAt: now,
+              outcome: data.status,
+              round: data.debug?.round ?? null,
+              audioChunks: data.debug?.audio_chunks ?? null,
+            });
+          }
+        }
         if (data.status === "match") {
           matchFoundRef.current = true;
           waitingForResultRef.current = false;
@@ -341,6 +364,9 @@ function WaveJack() {
         if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
           ws.send(e.data);
           if (DEV) {
+            if (debugTimingRef.current.firstChunkAt === null) {
+              markTiming({ firstChunkAt: performance.now() });
+            }
             debugChunksRef.current.push(e.data); // exactly the bytes the backend receives
             setDebugSent((s) => ({ ...s, chunks: s.chunks + 1, bytes: s.bytes + e.data.size }));
           }
@@ -582,7 +608,7 @@ function WaveJack() {
             </button>
             <button
               onClick={() => setAuthMode("signup")}
-              className="bg-gradient-button rounded-lg px-4 py-1.5 text-sm font-semibold text-white transition-[filter] hover:brightness-110"
+              className="bg-gradient-button rounded-lg px-4 py-1.5 text-sm font-semibold text-white hover:brightness-110"
             >
               Sign Up
             </button>
@@ -690,7 +716,7 @@ function WaveJack() {
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <button
               onClick={handleOrbClick}
-              className="bg-gradient-button glow-pink inline-flex items-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold text-white transition-[filter] hover:brightness-110"
+              className="bg-gradient-button glow-pink inline-flex items-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold text-white hover:brightness-110"
             >
               <Mic size={16} aria-hidden="true" />
               {state === "listening" ? "Stop Listening" : "Start Listening"}
@@ -763,7 +789,12 @@ function WaveJack() {
 
       {DEV && (
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <MicDebugPanel stream={debugStream} sent={debugSent} recordingUrl={debugUrl} />
+          <MicDebugPanel
+            stream={debugStream}
+            sent={debugSent}
+            recordingUrl={debugUrl}
+            timing={debugTiming}
+          />
         </div>
       )}
 

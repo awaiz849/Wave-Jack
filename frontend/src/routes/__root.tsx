@@ -1,5 +1,5 @@
 import { Outlet, Link, createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
-import { MotionConfig } from "framer-motion";
+import { MotionConfig, useReducedMotion } from "framer-motion";
 
 import appCss from "../styles.css?url";
 
@@ -46,7 +46,7 @@ export const Route = createRootRoute({
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
       {
         rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap",
+        href: "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap",
       },
       {
         rel: "stylesheet",
@@ -74,10 +74,12 @@ function RootShell({ children }: { children: React.ReactNode }) {
 }
 
 function RootComponent() {
-  // Honour the OS "reduce motion" setting for every Framer Motion animation
-  // (the pulsing orb, spinning ring, sliding modals and list items).
+  // Honour the OS "reduce motion" setting for every Framer Motion animation.
+  // reducedMotion="user" only drops transform animations; the zero-duration
+  // default also makes fades instant, so nothing moves at all.
+  const reduceMotion = useReducedMotion();
   return (
-    <MotionConfig reducedMotion="user">
+    <MotionConfig reducedMotion="user" transition={reduceMotion ? { duration: 0 } : undefined}>
       <Outlet />
     </MotionConfig>
   );

@@ -77,17 +77,14 @@
   ); /* white text >= 4.6:1 */
   --gradient-icon: linear-gradient(135deg, #a855f7, #ec4899);
 
-  /* Glows and elevation */
-  --glow-violet: 0 0 48px -8px rgb(168 85 247 / 0.45);
-  --glow-pink: 0 0 40px -6px rgb(236 72 153 / 0.45);
-  --glow-amber: 0 0 40px -10px rgb(245 158 11 / 0.35);
-  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 24px 48px -28px rgb(0 0 0 / 0.9);
+  /* Glows and elevation. Kept small: big blurred shadows are slow to paint on phones. */
+  --glow-violet: 0 0 20px -6px rgb(168 85 247 / 0.3);
+  --glow-pink: 0 0 16px -4px rgb(236 72 153 / 0.35);
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 12px 24px -16px rgb(0 0 0 / 0.8);
 
-  /* Page backdrop: violet bloom top-right, magenta/amber bloom bottom-right, faint grid. */
-  --backdrop-glow:
-    radial-gradient(60rem 40rem at 85% -10%, rgb(124 58 237 / 0.22), transparent 60%),
-    radial-gradient(50rem 36rem at 100% 85%, rgb(219 39 119 / 0.18), transparent 60%),
-    radial-gradient(40rem 30rem at 70% 110%, rgb(245 158 11 / 0.1), transparent 60%);
+  /* Page backdrop: one static violet bloom top-right and a faint grid, painted once
+     on a fixed layer (see .page-backdrop) so scrolling never repaints it. */
+  --backdrop-glow: radial-gradient(70rem 45rem at 90% -10%, rgb(124 58 237 / 0.2), transparent 60%);
   --backdrop-grid:
     linear-gradient(rgb(255 255 255 / 0.025) 1px, transparent 1px),
     linear-gradient(90deg, rgb(255 255 255 / 0.025) 1px, transparent 1px);
@@ -157,16 +154,24 @@
     background: var(--gradient-brand);
     opacity: 0.9;
   }
+  /* The backdrop lives on its own fixed layer instead of background-attachment:
+     fixed, which forces a full repaint on every scroll frame on mobile. */
   .page-backdrop {
+    position: relative;
+    isolation: isolate;
     background-color: var(--background);
+  }
+  .page-backdrop::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
     background-image: var(--backdrop-glow), var(--backdrop-grid);
     background-size:
       auto,
-      auto,
-      auto,
       48px 48px,
       48px 48px;
-    background-attachment: fixed;
   }
   .text-gradient {
     background: var(--gradient-brand);
@@ -206,7 +211,6 @@
     box-shadow: var(--glow-pink);
     color: #fff;
     font-weight: 600;
-    transition: filter 0.15s ease;
   }
   .btn-primary:hover:not(:disabled) {
     filter: brightness(1.1);
@@ -237,9 +241,6 @@
     border: 1px solid var(--border-strong);
     background: var(--input);
     color: var(--foreground);
-    transition:
-      border-color 0.15s ease,
-      box-shadow 0.15s ease;
   }
   .field::placeholder {
     color: var(--muted-foreground);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { EMPTY_TIMING, type MicDebugTiming } from "@/lib/mic-debug-timing";
 
 /**
  * TEMPORARY dev-only microphone diagnostics. Rendered only when
@@ -11,6 +12,9 @@ import { useEffect, useRef, useState } from "react";
  */
 export type MicDebugSent = { chunks: number; bytes: number; mimeType: string };
 
+const span = (from: number | null, to: number | null) =>
+  from === null || to === null ? "—" : `${Math.round(to - from).toLocaleString()} ms`;
+
 type TrackInfo = {
   label: string;
   muted: boolean;
@@ -22,10 +26,12 @@ export function MicDebugPanel({
   stream,
   sent,
   recordingUrl,
+  timing = EMPTY_TIMING,
 }: {
   stream: MediaStream | null;
   sent: MicDebugSent;
   recordingUrl: string | null;
+  timing?: MicDebugTiming;
 }) {
   const [track, setTrack] = useState<TrackInfo | null>(null);
   const [levelDb, setLevelDb] = useState<number | null>(null);
@@ -129,6 +135,21 @@ export function MicDebugPanel({
         <dt>sent to backend</dt>
         <dd className="text-foreground">
           {sent.chunks} chunks · {sent.bytes.toLocaleString()} bytes · {sent.mimeType || "—"}
+        </dd>
+        <dt>tap → first chunk sent</dt>
+        <dd className="text-foreground">{span(timing.tapAt, timing.firstChunkAt)}</dd>
+        <dt>first chunk → first backend reply</dt>
+        <dd className="text-foreground">{span(timing.firstChunkAt, timing.firstReplyAt)}</dd>
+        <dt>first chunk → final answer</dt>
+        <dd className="text-foreground">
+          {span(timing.firstChunkAt, timing.finalAt)}
+          {timing.outcome ? ` · ${timing.outcome}` : ""}
+        </dd>
+        <dt>matched on round (audio it had)</dt>
+        <dd className="text-foreground">
+          {timing.round !== null
+            ? `round ${timing.round} · ${timing.audioChunks ?? "?"} s of audio`
+            : "—"}
         </dd>
       </dl>
       <div className="mt-3 h-2 w-full rounded-sm bg-white/[0.06]" aria-hidden="true">

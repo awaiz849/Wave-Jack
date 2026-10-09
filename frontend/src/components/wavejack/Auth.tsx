@@ -329,7 +329,7 @@ export function AuthModal({ mode, onClose, onAuth, onSwitchMode }: AuthModalProp
     <AnimatePresence>
       {mode && (
         <motion.div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(5_3_10/0.78)] p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(5_3_10/0.9)] p-4"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -340,7 +340,7 @@ export function AuthModal({ mode, onClose, onAuth, onSwitchMode }: AuthModalProp
             role="dialog"
             aria-modal="true"
             aria-labelledby={`${id}-title`}
-            className="panel panel-edge glow-violet w-full max-w-md rounded-2xl p-6 sm:p-8"
+            className="panel panel-edge w-full max-w-md rounded-2xl p-6 sm:p-8"
             initial={{ y: 8 }}
             animate={{ y: 0 }}
             exit={{ y: 8 }}
@@ -459,7 +459,7 @@ export function LimitModal({
     <AnimatePresence>
       {open && (
         <motion.div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(5_3_10/0.78)] p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(5_3_10/0.9)] p-4"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -469,14 +469,14 @@ export function LimitModal({
             role="dialog"
             aria-modal="true"
             aria-labelledby={`${id}-title`}
-            className="panel panel-edge glow-violet w-full max-w-md rounded-2xl p-6 text-center sm:p-8"
+            className="panel panel-edge w-full max-w-md rounded-2xl p-6 text-center sm:p-8"
             initial={{ y: 8 }}
             animate={{ y: 0 }}
             exit={{ y: 8 }}
           >
             <div
               aria-hidden="true"
-              className="bg-gradient-button glow-pink font-signal mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl text-sm font-semibold text-white"
+              className="bg-gradient-button font-signal mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl text-sm font-medium text-white"
             >
               2/2
             </div>

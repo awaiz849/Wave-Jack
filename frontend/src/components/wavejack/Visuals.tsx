@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { useEffect, useRef, useState } from "react";
+import { motion, useInView, useReducedMotion } from "framer-motion";
 
 /**
  * The one recurring visual idea in this design: a waveform trace that
@@ -44,38 +44,58 @@ export function WaveformFingerprint({ className = "" }: { className?: string }) 
 const BARS = 28;
 const idleBars = () => Array.from({ length: BARS }, (_, i) => 0.12 + ((i * 7) % 5) * 0.02);
 
+/** True while the browser tab is visible (animations pause in background tabs). */
+function usePageVisible() {
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    const update = () => setVisible(document.visibilityState === "visible");
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
+  return visible;
+}
+
 /**
  * Decorative level meter — random bar heights while listening, a still,
- * low pattern otherwise. (It isn't driven by the real mic signal.)
+ * low pattern otherwise. (It isn't driven by the real mic signal.) Bars move
+ * with scaleY (a compositor-only transform), and only while recording, on
+ * screen, in a visible tab, and with motion allowed.
  */
 export function LiveWaveform({ active }: { active: boolean }) {
   const [heights, setHeights] = useState(idleBars);
+  const ref = useRef<HTMLDivElement>(null);
+  const inView = useInView(ref);
+  const pageVisible = usePageVisible();
+  const reduceMotion = useReducedMotion();
+  const running = active && inView && pageVisible && !reduceMotion;
 
   useEffect(() => {
-    if (!active) {
+    if (!running) {
       setHeights(idleBars());
       return;
     }
-    // One plain interval, so the cleanup really stops it. (The old timeout +
-    // requestAnimationFrame chain could slip past cleanup and keep running.)
+    // One plain interval, so the cleanup really stops it.
     const id = window.setInterval(
       () => setHeights((h) => h.map(() => Math.random() * 0.85 + 0.15)),
-      90,
+      120,
     );
     return () => window.clearInterval(id);
-  }, [active]);
+  }, [running]);
 
   return (
     <div
+      ref={ref}
       className="flex h-28 items-end justify-center gap-[3px] rounded-xl border border-[var(--border)] bg-black/30 px-3 pb-2 pt-3"
       aria-hidden="true"
     >
       {heights.map((h, i) => (
         <motion.div
           key={i}
-          className="w-2 rounded-t-[3px]"
+          className="h-full w-2 origin-bottom rounded-t-[3px]"
           style={{ background: barColor(i / (heights.length - 1)) }}
-          animate={{ height: `${h * 100}%` }}
+          initial={false}
+          animate={{ scaleY: h }}
           transition={{ duration: 0.15, ease: "easeOut" }}
         />
       ))}
@@ -117,6 +137,15 @@ const TICKS = Array.from({ length: 96 }, (_, i) => 3 + ((i * 37) % 9) * 0.55);
 export function MicOrb({ state, countdown, total = 10, extended = false }: OrbProps) {
   const isListening = state === "listening";
   const isProcessing = state === "processing";
+  // Loops (breathing, spinning ring) only run while listening/identifying, on
+  // screen, in a visible tab, and with motion allowed; otherwise everything is still.
+  const ref = useRef<HTMLDivElement>(null);
+  const inView = useInView(ref);
+  const pageVisible = usePageVisible();
+  const reduceMotion = useReducedMotion();
+  const canLoop = inView && pageVisible && !reduceMotion;
+  const breathe = isListening && canLoop;
+  const spin = isProcessing && canLoop;
   // Percent of the ring to draw (pathLength=100, so it holds at any size).
   const progress = isListening ? ((total - countdown) / total) * 100 : 0;
   const title = isListening
@@ -134,17 +163,18 @@ export function MicOrb({ state, countdown, total = 10, extended = false }: OrbPr
 
   return (
     <div
+      ref={ref}
       className="relative flex h-[280px] w-[280px] items-center justify-center sm:h-[340px] sm:w-[340px]"
       aria-hidden="true"
     >
-      {/* Ambient glow */}
+      {/* Ambient glow: a plain radial gradient that fades out on its own (no blur
+          filter); only its opacity changes. */}
       <div
-        className="absolute inset-[4%] rounded-full"
+        className="absolute -inset-[6%] rounded-full"
         style={{
           background:
-            "radial-gradient(circle, rgb(168 85 247 / 0.45) 0%, rgb(236 72 153 / 0.25) 45%, transparent 70%)",
-          filter: "blur(28px)",
-          opacity: isListening ? 0.95 : 0.6,
+            "radial-gradient(circle, rgb(168 85 247 / 0.32) 0%, rgb(236 72 153 / 0.16) 38%, rgb(236 72 153 / 0.05) 55%, transparent 70%)",
+          opacity: isListening ? 1 : 0.65,
           transition: "opacity 0.4s ease",
         }}
       />
@@ -157,12 +187,12 @@ export function MicOrb({ state, countdown, total = 10, extended = false }: OrbPr
         viewBox="0 0 100 100"
         className="absolute inset-[7%] h-[86%] w-[86%]"
         animate={
-          isProcessing ? { rotate: 360 } : isListening ? { scale: [1, 1.03, 1] } : { rotate: 0 }
+          spin ? { rotate: 360 } : breathe ? { scale: [1, 1.03, 1] } : { rotate: 0, scale: 1 }
         }
         transition={
-          isProcessing
+          spin
             ? { duration: 6, repeat: Infinity, ease: "linear" }
-            : { duration: 1.2, repeat: isListening ? Infinity : 0, ease: "easeInOut" }
+            : { duration: 1.2, repeat: breathe ? Infinity : 0, ease: "easeInOut" }
         }
       >
         <defs>
@@ -211,20 +241,19 @@ export function MicOrb({ state, countdown, total = 10, extended = false }: OrbPr
           strokeLinecap="round"
           pathLength={100}
           strokeDasharray={`${progress} 100`}
-          style={{ transition: "stroke-dasharray 0.3s linear" }}
         />
       </svg>
 
       {/* Sphere */}
       <motion.div
-        className="glow-violet relative flex h-[56%] w-[56%] flex-col items-center justify-center rounded-full border border-white/10"
+        className="relative flex h-[56%] w-[56%] flex-col items-center justify-center rounded-full border border-white/10"
         style={{
           background: "radial-gradient(circle at 35% 28%, #241c34 0%, #120e1b 55%, #0b0812 100%)",
         }}
-        animate={isListening ? { scale: [1, 1.025, 1] } : { scale: 1 }}
-        transition={{ duration: 1.6, repeat: isListening ? Infinity : 0, ease: "easeInOut" }}
+        animate={breathe ? { scale: [1, 1.025, 1] } : { scale: 1 }}
+        transition={{ duration: 1.6, repeat: breathe ? Infinity : 0, ease: "easeInOut" }}
       >
-        <span className="bg-gradient-icon glow-pink flex h-14 w-14 items-center justify-center rounded-2xl p-[1.5px]">
+        <span className="bg-gradient-icon flex h-14 w-14 items-center justify-center rounded-2xl p-[1.5px]">
           <span
             className="flex h-full w-full items-center justify-center rounded-[14px]"
             style={{ background: isListening ? "transparent" : "#120e1b" }}

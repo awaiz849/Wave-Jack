@@ -36,7 +36,7 @@ export function PageShell({
       <div className="px-4 pt-4 sm:px-6">
         <nav
           aria-label="Main"
-          className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-2xl border border-[var(--border)] bg-[rgb(20_16_29/0.75)] px-4 py-3 backdrop-blur-md sm:px-5"
+          className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-2xl border border-[var(--border)] bg-[rgb(20_16_29/0.92)] px-4 py-3 sm:px-5"
         >
           <Link to="/" className="flex items-center gap-3" aria-label="WaveJack home">
             <span
