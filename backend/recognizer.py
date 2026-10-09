@@ -82,7 +82,12 @@ def final_match(ranked: list[tuple[int, int]]) -> tuple[int, int] | None:
     return None
 
 
-def song_result(song_id: int, votes: int) -> dict:
+def runner_up(ranked: list[tuple[int, int]], song_id: int) -> int:
+    """Votes of the best song other than `song_id` (0 if there is none)."""
+    return next((votes for votes, sid in ranked if sid != song_id), 0)
+
+
+def song_result(song_id: int, votes: int, runner_up_votes: int = 0) -> dict:
     song = get_client().table("songs") \
         .select("title, artist, youtube_url") \
         .eq("id", song_id) \
@@ -93,7 +98,9 @@ def song_result(song_id: int, votes: int) -> dict:
         "title": song.data["title"],
         "artist": song.data["artist"],
         "youtube_url": song.data.get("youtube_url"),
-        "confidence": round(min(1.0, votes / 200), 2)
+        "votes": votes,
+        "runner_up_votes": runner_up_votes,
+        "confidence": round(min(1.0, votes / 200), 2),  # legacy; the UI no longer shows it
     }
 
 
@@ -101,5 +108,6 @@ def query_hashes(hashes: list[tuple[str, int]]) -> dict | None:
     """One-shot match for a complete recording (used by tests and the final answer)."""
     if not hashes:
         return None
-    best = final_match(StreamMatcher().update(hashes))
-    return song_result(best[1], best[0]) if best else None
+    ranked = StreamMatcher().update(hashes)
+    best = final_match(ranked)
+    return song_result(best[1], best[0], runner_up(ranked, best[1])) if best else None

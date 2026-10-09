@@ -23,6 +23,7 @@ from recognizer import (
     StreamMatcher,
     final_match,
     is_confident,
+    runner_up,
     song_result,
 )
 from auth import CurrentUser, require_admin
@@ -191,6 +192,10 @@ def run_recognition(audio_path: str) -> dict:
 
     # The winner is the (song_id, delta) pair with the most aligned hashes
     (best_song_id, best_delta), hit_count = alignment_votes.most_common(1)[0]
+    # Best score among the OTHER songs (reported only; doesn't affect the decision).
+    runner_up_votes = max(
+        (n for (sid, _), n in alignment_votes.items() if sid != best_song_id), default=0
+    )
 
     # Without this, a handful of chance hash collisions was reported as a match.
     if hit_count < MIN_MATCH_VOTES:
@@ -211,6 +216,7 @@ def run_recognition(audio_path: str) -> dict:
         "filename": song.get("filename"),
         "song_id": best_song_id,
         "matched_hashes": hit_count,
+        "runner_up_votes": runner_up_votes,
         "offset_seconds": offset_seconds,
     }
 
@@ -408,7 +414,9 @@ def identify_upload(file: UploadFile = File(...)):
 
     hashes_matched = result.pop("matched_hashes", 0)
     result["hashes_matched"] = hashes_matched
-    result["confidence"] = min(1.0, hashes_matched / 200)
+    result["votes"] = hashes_matched
+    result["runner_up_votes"] = result.get("runner_up_votes", 0)
+    result["confidence"] = min(1.0, hashes_matched / 200)  # legacy; the UI no longer shows it
     result["offset"] = result.pop("offset_seconds", 0.0)
 
     return result
@@ -516,7 +524,7 @@ async def recognize_stream(websocket: WebSocket):
     recording_done = False
 
     async def send_match(best: tuple[int, int], how: str) -> None:
-        result = await asyncio.to_thread(song_result, best[1], best[0])
+        result = await asyncio.to_thread(song_result, best[1], best[0], runner_up(ranked, best[1]))
         print(f"Match ({how}) at {time.perf_counter() - t0:.1f}s: {result['title']} "
               f"({best[0]} votes, runner-up {ranked[1][0] if len(ranked) > 1 else 0})")
         await websocket.send_json({"status": "match", "result": result})

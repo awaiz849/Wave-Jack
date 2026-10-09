@@ -138,6 +138,13 @@ export function MicDebugPanel({
         <div className="mt-4">
           <div className="mb-1">play back what was sent to the backend:</div>
           <audio controls src={recordingUrl} className="w-full" />
+          <a
+            href={recordingUrl}
+            download={`wavejack-mic-${new Date().toISOString().replace(/[:.]/g, "-")}.webm`}
+            className="mt-2 inline-block text-accent-2 underline underline-offset-2 hover:text-foreground"
+          >
+            download this recording (.webm)
+          </a>
         </div>
       )}
     </section>

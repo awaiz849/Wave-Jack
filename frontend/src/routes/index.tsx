@@ -55,6 +55,8 @@ type IdentifyResponse = {
   confidence: number;
   song_id?: number;
   youtube_url?: string | null; // sent by both /identify and the WebSocket result
+  votes?: number; // aligned hashes for the winning song (both paths)
+  runner_up_votes?: number; // best other song, 0 if none (both paths)
 };
 
 const PIPELINE_STEPS = [
@@ -66,6 +68,11 @@ const PIPELINE_STEPS = [
 ];
 
 const RECORD_SECONDS = 10;
+// No match by the end of the normal recording: keep recording (the backend keeps
+// matching every new chunk) for up to this many more seconds before giving up.
+const EXTRA_SECONDS = 10;
+const NO_MATCH_AFTER_EXTRA =
+  "No match. Try again from a louder part of the song, closer to the mic.";
 
 // FIX: mobile networks (carrier NAT, background-tab throttling, screen lock)
 // can silently drop a WebSocket or let a fetch hang with no error and no
@@ -77,6 +84,10 @@ const PROCESSING_TIMEOUT_MS = 20000;
 function WaveJack() {
   const [state, setState] = useState<AppState>("idle");
   const [countdown, setCountdown] = useState(RECORD_SECONDS);
+  // True during the extra listening time after the first RECORD_SECONDS.
+  const [extended, setExtended] = useState(false);
+  const extendedRef = useRef(false); // same, for the WebSocket handler (no stale closure)
+  const reachedMaxRef = useRef(false); // recording ran the full RECORD_SECONDS + EXTRA_SECONDS
   const { user, loading: authLoading } = useAuth();
   const [guestUses, setGuestUses] = useState(0);
   const [authMode, setAuthMode] = useState<"signin" | "signup" | null>(null);
@@ -213,6 +224,9 @@ function WaveJack() {
     if (!checkLimit()) return;
     matchFoundRef.current = false;
     waitingForResultRef.current = false;
+    extendedRef.current = false;
+    reachedMaxRef.current = false;
+    setExtended(false);
     setResult(null);
     setErrorMsg(null);
     setSilentMsg(null);
@@ -290,7 +304,9 @@ function WaveJack() {
           endRecording();
           showError(
             data.status === "no_match"
-              ? "No match — this song isn't in the library yet."
+              ? reachedMaxRef.current
+                ? NO_MATCH_AFTER_EXTRA
+                : "No match — this song isn't in the library yet."
               : data.detail || "The server couldn't process that recording.",
           );
         }
@@ -352,10 +368,27 @@ function WaveJack() {
       setCountdown(sec);
       cdTimerRef.current = setInterval(() => {
         sec--;
+        if (sec <= 0 && !extendedRef.current) {
+          // Normal recording is over and no match has arrived (a match would have
+          // cleared this timer): keep the mic and socket open for EXTRA_SECONDS more.
+          extendedRef.current = true;
+          setExtended(true);
+          sec = EXTRA_SECONDS;
+        } else if (sec <= 0) {
+          reachedMaxRef.current = true;
+          stopListening();
+          return;
+        }
         setCountdown(sec);
-        if (sec <= 0) stopListening();
       }, 1000);
-      stopTimerRef.current = setTimeout(stopListening, RECORD_SECONDS * 1000);
+      // Backstop in case the interval is throttled (background tab): never record past the max.
+      stopTimerRef.current = setTimeout(
+        () => {
+          reachedMaxRef.current = true;
+          stopListening();
+        },
+        (RECORD_SECONDS + EXTRA_SECONDS) * 1000 + 1500,
+      );
     } catch (err) {
       console.error("Recording failed to start:", err);
       endRecording();
@@ -383,8 +416,22 @@ function WaveJack() {
     if (DEV) setDebugStream(null); // stops the level meter; the panel keeps the last device info
   };
 
+  // Leaving the page mid-recording: release the mic, timers and socket.
+  const endRecordingRef = useRef(endRecording);
+  endRecordingRef.current = endRecording;
+  useEffect(
+    () => () => {
+      endRecordingRef.current();
+      if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
+      wsRef.current?.close();
+    },
+    [],
+  );
+
   const stopListening = () => {
     endRecording();
+    extendedRef.current = false;
+    setExtended(false);
     waitingForResultRef.current = true;
     setState("processing");
     armProcessingTimeout(); // FIX: guarantee we leave "processing" even if the socket dies silently
@@ -436,7 +483,9 @@ function WaveJack() {
 
   const statusAnnouncement =
     state === "listening"
-      ? `Listening for ${RECORD_SECONDS} seconds.`
+      ? extended
+        ? `No match yet. Still listening for up to ${EXTRA_SECONDS} more seconds.`
+        : `Listening for ${RECORD_SECONDS} seconds.`
       : state === "processing"
         ? "Identifying the song…"
         : state === "result" && result
@@ -454,6 +503,8 @@ function WaveJack() {
       title: resp.title,
       artist: resp.artist,
       confidence: resp.confidence,
+      votes: resp.votes,
+      runner_up_votes: resp.runner_up_votes,
       at: Date.now(),
     };
 
@@ -586,7 +637,9 @@ function WaveJack() {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                 >
-                  <span className="font-signal text-sm text-signal">listening · {countdown}s</span>
+                  <span className="font-signal text-sm text-signal">
+                    {extended ? "still listening…" : "listening"} · {countdown}s
+                  </span>
                   <span className="font-signal text-sm text-muted-foreground"> · tap to stop</span>
                 </motion.div>
               )}
@@ -691,6 +744,8 @@ function WaveJack() {
                       : "idle"
                 }
                 countdown={countdown}
+                total={extended ? EXTRA_SECONDS : RECORD_SECONDS}
+                extended={extended}
               />
             </motion.div>
             {dragOver && (

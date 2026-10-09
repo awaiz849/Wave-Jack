@@ -491,6 +491,8 @@ def cmd_accuracy(a):
                 clip = make_clip(path, start, a.duration, gain, snr, "webm", seed=seed)
                 try:
                     for p, _ in ACCURACY_PATHS:
+                        if a.path != "both" and p != a.path:
+                            continue
                         res = run_identify(clip) if p == "identify" else run_ws(clip)
                         got = answer_id(res)
                         if sid is None:
@@ -626,7 +628,7 @@ def write_accuracy_md(a, trials, lib, tested_ids, elapsed):
                      f"{f'{other[0]} ({title(other[1])})' if other else '—'} |")
         L.append("")
 
-    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "accuracy.md")
+    out = a.out or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "accuracy.md")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(L))
@@ -711,6 +713,8 @@ def main_cli():
     r.add_argument("--unknown", action="append", default=[], metavar="FILE",
                    help="audio file NOT in the library; expected answer is no match (repeatable)")
     r.add_argument("--duration", type=float, default=10.0)
+    r.add_argument("--path", choices=["identify", "ws", "both"], default="both")
+    r.add_argument("--out", default=None, help="report path (default docs/accuracy.md)")
 
     p = sub.add_parser("params", help="compare stored fingerprints with what the query pipeline computes")
     p.add_argument("file")

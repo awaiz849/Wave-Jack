@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Check, Copy, ExternalLink } from "lucide-react";
+import { STRENGTH_BADGE, matchDetail, matchStrength } from "@/lib/match-strength";
 
 export type MatchResult = {
   title: string;
   artist: string;
-  confidence: number;
+  confidence: number; // legacy, not shown
+  votes?: number | null;
+  runner_up_votes?: number | null;
   youtube_url?: string | null;
 };
 
@@ -58,6 +61,9 @@ export function ResultCard({ result }: { result: MatchResult }) {
     resetRef.current = setTimeout(() => setCopied("idle"), 2000);
   };
 
+  const strength = matchStrength(result);
+  const detail = matchDetail(result);
+
   return (
     <motion.section
       aria-label="Match result"
@@ -65,9 +71,21 @@ export function ResultCard({ result }: { result: MatchResult }) {
       animate={{ opacity: 1, y: 0 }}
       className="panel panel-edge glow-violet mt-4 max-w-sm rounded-[var(--radius)] p-5"
     >
-      <div className="font-signal text-sm text-signal">
-        matched · {Math.round(result.confidence * 100)}% confidence
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-signal text-sm text-signal">matched</span>
+        {strength && (
+          <span
+            className={`font-signal inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${STRENGTH_BADGE[strength]}`}
+          >
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+            <span className="sr-only"> · </span>
+            {strength.toLowerCase()} match
+          </span>
+        )}
       </div>
+      {detail && (
+        <div className="font-signal mt-2 text-xs tabular-nums text-muted-foreground">{detail}</div>
+      )}
       <div className="font-display mt-2 text-2xl font-semibold text-foreground">{result.title}</div>
       <div className="text-base text-muted-foreground">{result.artist}</div>
 

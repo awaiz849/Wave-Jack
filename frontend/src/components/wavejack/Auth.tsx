@@ -17,8 +17,10 @@ export type AuthUser = { id: string; email: string; name: string };
 export type HistoryItem = {
   title: string;
   artist: string;
-  confidence: number;
+  confidence: number; // legacy, not shown
   hashes_matched?: number;
+  votes?: number; // aligned hashes for the matched song; absent for account history
+  runner_up_votes?: number;
   at: number;
 };
 

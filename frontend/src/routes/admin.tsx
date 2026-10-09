@@ -10,6 +10,7 @@ import {
   type HistoryItem,
 } from "@/components/wavejack/Auth";
 import { Trash2, Upload, Music, Activity } from "lucide-react";
+import { STRENGTH_TONE, matchDetail, matchStrength } from "@/lib/match-strength";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({ meta: [{ title: "Admin — WaveJack" }] }),
@@ -353,7 +354,7 @@ function AdminPage() {
                       Artist
                     </th>
                     <th scope="col" className="px-5 pt-5 pb-3 font-normal">
-                      Confidence
+                      Match
                     </th>
                     <th scope="col" className="px-5 pt-5 pb-3 font-normal">
                       Time
@@ -372,8 +373,8 @@ function AdminPage() {
                     <tr key={i} className="hairline-t transition-colors hover:bg-white/[0.03]">
                       <td className="px-5 py-3 font-medium text-foreground">{h.title}</td>
                       <td className="px-5 py-3 text-muted-foreground">{h.artist}</td>
-                      <td className="font-signal px-5 py-3 text-signal">
-                        {(h.confidence * 100).toFixed(0)}%
+                      <td className="px-5 py-3">
+                        <StrengthCell item={h} />
                       </td>
                       <td className="font-signal whitespace-nowrap px-5 py-3 text-xs text-muted-foreground">
                         {new Date(h.at).toLocaleString()}
@@ -409,5 +410,16 @@ function StatCard({
         {value}
       </div>
     </div>
+  );
+}
+
+function StrengthCell({ item }: { item: HistoryItem }) {
+  const strength = matchStrength(item);
+  if (!strength) return null; // no vote data recorded for this entry
+  return (
+    <span className="font-signal text-xs">
+      <span className={STRENGTH_TONE[strength]}>{strength}</span>
+      <span className="block text-muted-foreground">{matchDetail(item)}</span>
+    </span>
   );
 }

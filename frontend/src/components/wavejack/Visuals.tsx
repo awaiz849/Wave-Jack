@@ -102,6 +102,8 @@ interface OrbProps {
   countdown: number;
   /** Length of a recording in seconds; the ring fills over this time. */
   total?: number;
+  /** In the extra listening time after a recording found no match yet. */
+  extended?: boolean;
 }
 
 // Fixed tick pattern for the spectrum ring (deterministic, so it doesn't jitter on re-render).
@@ -112,12 +114,18 @@ const TICKS = Array.from({ length: 96 }, (_, i) => 3 + ((i * 37) % 9) * 0.55);
  * violet/pink glow around a dark sphere holding the mic. The outer arc fills as
  * the countdown runs. Motion follows prefers-reduced-motion via <MotionConfig>.
  */
-export function MicOrb({ state, countdown, total = 10 }: OrbProps) {
+export function MicOrb({ state, countdown, total = 10, extended = false }: OrbProps) {
   const isListening = state === "listening";
   const isProcessing = state === "processing";
   // Percent of the ring to draw (pathLength=100, so it holds at any size).
   const progress = isListening ? ((total - countdown) / total) * 100 : 0;
-  const title = isListening ? "Listening" : isProcessing ? "Identifying" : "Tap to listen";
+  const title = isListening
+    ? extended
+      ? "Still listening"
+      : "Listening"
+    : isProcessing
+      ? "Identifying"
+      : "Tap to listen";
   const subtitle = isListening
     ? `${countdown}s · tap to stop`
     : isProcessing
