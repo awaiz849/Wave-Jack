@@ -11,11 +11,10 @@ from fingerprint import fingerprint
 from database import (
     get_client,
     store_song_with_fingerprints,
-    query_fingerprints,
+    match_candidates,
     get_song_by_id
 )
 from record import record_clip
-from collections import Counter
 from fastapi import WebSocket, WebSocketDisconnect
 from recognizer import (
     fingerprint_buffer,
@@ -173,29 +172,20 @@ def run_recognition(audio_path: str) -> dict:
     # Build a lookup: hash_value → time position in the clip
     clip_time = {h[0]: h[1] for h in hashes}
 
-    hash_vals = list(clip_time.keys())
-    matches = query_fingerprints(hash_vals)
+    # Vote by (song_id, time_delta) pairs, deltas binned in groups of 2 frames to
+    # absorb tiny timing jitter: delta = time_in_song - time_in_clip, binned as
+    # round(delta / 2) * 2. The counting runs in Postgres in one request
+    # (database.match_candidates, supabase/match_votes.sql) and returns each song's
+    # best (votes, delta).
+    ranked = match_candidates(clip_time, bin_width=2)
 
-    if not matches:
+    if not ranked:
         raise HTTPException(status_code=404, detail="No matching song found")
 
-    # Vote by (song_id, time_delta) pairs.
-    # Bin deltas in groups of 2 frames to absorb tiny timing jitter.
-    alignment_votes = Counter()
-    for m in matches:
-        song_id = m["song_id"]
-        time_in_song = m["time_offset"]
-        time_in_clip = clip_time.get(m["hash"], 0)
-        delta = time_in_song - time_in_clip
-        binned_delta = round(delta / 2) * 2   # bin width = 2 frames
-        alignment_votes[(song_id, binned_delta)] += 1
-
     # The winner is the (song_id, delta) pair with the most aligned hashes
-    (best_song_id, best_delta), hit_count = alignment_votes.most_common(1)[0]
+    hit_count, best_song_id, best_delta = ranked[0]
     # Best score among the OTHER songs (reported only; doesn't affect the decision).
-    runner_up_votes = max(
-        (n for (sid, _), n in alignment_votes.items() if sid != best_song_id), default=0
-    )
+    runner_up_votes = ranked[1][0] if len(ranked) > 1 else 0
 
     # Without this, a handful of chance hash collisions was reported as a match.
     if hit_count < MIN_MATCH_VOTES:
@@ -486,9 +476,11 @@ async def _close_quietly(websocket: WebSocket) -> None:
         pass
 
 
-async def _match_round(matcher: StreamMatcher, snapshot: bytes) -> list[tuple[int, int]]:
-    hashes = await asyncio.to_thread(fingerprint_buffer, snapshot)
-    return await asyncio.to_thread(matcher.update, hashes)
+async def _match_round(
+    matcher: StreamMatcher, snapshot: bytes, timings: dict | None = None
+) -> list[tuple[int, int]]:
+    hashes = await asyncio.to_thread(fingerprint_buffer, snapshot, timings)
+    return await asyncio.to_thread(matcher.update, hashes, timings)
 
 
 @app.websocket("/ws/recognize")
@@ -498,8 +490,8 @@ async def recognize_stream(websocket: WebSocket):
 
     The browser sends WebM pieces every second or so. A matching round starts on
     the first piece and, after that, as soon as the previous round finishes and new
-    audio has arrived — it never waits for the next piece to show up. Rounds share
-    one StreamMatcher, so each only looks up the hashes the new audio added.
+    audio has arrived — it never waits for the next piece to show up. Each round
+    scores the whole buffer in one database call (StreamMatcher).
     The answer goes out the moment a round is confident (recognizer.is_confident);
     otherwise, after {"type": "done"}, a last round covers everything and the
     usual MIN_MATCH_VOTES rule decides.
@@ -522,12 +514,26 @@ async def recognize_stream(websocket: WebSocket):
     round_bytes = 0  # how much of the buffer the running round covers
     recv_task: asyncio.Task | None = asyncio.create_task(websocket.receive())
     recording_done = False
+    # Diagnostics only (logged per round, and sent with a match as "debug").
+    chunks_received = 0
+    round_no = 0  # rounds started
+    round_chunks = 0  # chunks the running round covers
+    round_timings: dict = {}
+    scored_round = scored_chunks = 0  # the round behind `ranked`
 
     async def send_match(best: tuple[int, int], how: str) -> None:
         result = await asyncio.to_thread(song_result, best[1], best[0], runner_up(ranked, best[1]))
         print(f"Match ({how}) at {time.perf_counter() - t0:.1f}s: {result['title']} "
               f"({best[0]} votes, runner-up {ranked[1][0] if len(ranked) > 1 else 0})")
-        await websocket.send_json({"status": "match", "result": result})
+        await websocket.send_json(
+            {
+                "status": "match",
+                "result": result,
+                # Diagnostics only (the dev mic panel shows them): which round matched,
+                # and how many 1-second chunks of audio it had.
+                "debug": {"round": scored_round, "audio_chunks": scored_chunks},
+            }
+        )
         await asyncio.sleep(1.5)
         await _close_quietly(websocket)
 
@@ -536,7 +542,12 @@ async def recognize_stream(websocket: WebSocket):
             # Start a round whenever none is running and there's audio it hasn't scored yet.
             if round_task is None and len(audio_buffer) > scored_bytes:
                 round_bytes = len(audio_buffer)
-                round_task = asyncio.create_task(_match_round(matcher, bytes(audio_buffer)))
+                round_no += 1
+                round_chunks = chunks_received
+                round_timings = {"started": time.perf_counter()}
+                round_task = asyncio.create_task(
+                    _match_round(matcher, bytes(audio_buffer), round_timings)
+                )
 
             if recording_done and round_task is None:
                 break  # everything received has been scored
@@ -557,7 +568,18 @@ async def recognize_stream(websocket: WebSocket):
                         await _close_quietly(websocket)
                         return
                 scored_bytes = round_bytes
+                scored_round, scored_chunks = round_no, round_chunks
                 round_task = None
+                rt = round_timings
+                print(
+                    f"Round {round_no} ({round_chunks} chunks, {round_bytes} bytes) done at "
+                    f"{time.perf_counter() - t0:.1f}s: decode {rt.get('decode_ms', 0):.0f} ms, "
+                    f"fingerprint {rt.get('fingerprint_ms', 0):.0f} ms ({rt.get('hashes', 0)} hashes), "
+                    f"lookup {rt.get('lookup_ms', 0):.0f} ms ({rt.get('requests', 0)} requests, "
+                    f"{rt.get('new_hashes', 0)} new hashes, {rt.get('rows', 0)} rows), "
+                    f"vote {rt.get('vote_ms', 0):.1f} ms, total {(time.perf_counter() - rt['started']) * 1000:.0f} ms; "
+                    f"top {ranked[0][0] if ranked else 0} votes, runner-up {ranked[1][0] if len(ranked) > 1 else 0}"
+                )
                 if is_confident(ranked):
                     await send_match(ranked[0], "early")
                     return
@@ -580,6 +602,7 @@ async def recognize_stream(websocket: WebSocket):
                         await websocket.close(code=1009)  # message too big
                         return
                     audio_buffer.extend(chunk)
+                    chunks_received += 1
                     await websocket.send_json({"status": "listening"})
                 if not recording_done:
                     recv_task = asyncio.create_task(websocket.receive())

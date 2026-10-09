@@ -130,9 +130,11 @@ STATEMENT_TIMEOUT = "57014"
 _lookup_pool = ThreadPoolExecutor(max_workers=DB_QUERY_CONCURRENCY, thread_name_prefix="fp-lookup")
 
 QUERY_CHUNK_SIZE = 200
+FUNCTION_NOT_FOUND = "PGRST202"  # PostgREST: no such function (match_votes.sql not applied)
+_rpc_missing = False
 
 
-def query_fingerprints(hash_vals: list[str]) -> list[dict]:
+def query_fingerprints(hash_vals: list[str], stats: dict | None = None) -> list[dict]:
     """
     Every fingerprint row whose hash is in hash_vals.
 
@@ -140,7 +142,12 @@ def query_fingerprints(hash_vals: list[str]) -> list[dict]:
     across songs), and the API would silently cut it off. So a chunk that comes
     back full is split in half and re-queried; a single hash with that many rows
     is paged through by id.
+
+    If `stats` is given, stats["requests"] is set to the number of HTTP requests
+    made (for timing logs; it doesn't change what is fetched).
     """
+    if stats is not None:
+        stats["requests"] = 0
     client = get_client()
     # A hash listed twice could land in two chunks (or two halves of a split one)
     # and have its rows returned twice. Callers already pass unique hashes; this
@@ -148,16 +155,85 @@ def query_fingerprints(hash_vals: list[str]) -> list[dict]:
     hash_vals = list(dict.fromkeys(hash_vals))
     chunks = [hash_vals[i : i + QUERY_CHUNK_SIZE] for i in range(0, len(hash_vals), QUERY_CHUNK_SIZE)]
     if len(chunks) <= 1:
-        return _fetch_chunk(client, chunks[0]) if chunks else []
+        return _fetch_chunk(client, chunks[0], stats) if chunks else []
 
     # map() keeps chunk order, so the rows come back in the same order every run.
     all_results = []
-    for rows in _lookup_pool.map(lambda chunk: _fetch_chunk(client, chunk), chunks):
+    for rows in _lookup_pool.map(lambda chunk: _fetch_chunk(client, chunk, stats), chunks):
         all_results.extend(rows)
     return all_results
 
 
-def _fetch_chunk(client: Client, chunk: list[str]) -> list[dict]:
+def match_candidates(
+    clip_offsets: dict[str, int], bin_width: int, limit: int = 50, stats: dict | None = None
+) -> list[tuple[int, int, int]]:
+    """
+    Time-offset voting for a clip: [(votes, song_id, delta), ...], best song first,
+    one entry per song (its best delta). `clip_offsets` maps each clip hash to its
+    frame in the clip; `bin_width` 2 = POST /identify (deltas binned in pairs of
+    frames, round(delta / 2) * 2), 1 = WebSocket (exact deltas).
+
+    Runs in Postgres (supabase/match_votes.sql): one request, and only a few rows
+    come back, so the 1000-row cap never applies. Checked equal to the old Python
+    voting on 252 clip/mode comparisons. If the function isn't installed, the same
+    voting runs here on rows from query_fingerprints(). `stats` as in query_fingerprints.
+    """
+    global _rpc_missing
+    if stats is not None:
+        stats["requests"] = 0
+    if not clip_offsets:
+        return []
+    hashes = list(clip_offsets)
+    if not _rpc_missing:
+        client = get_client()
+        params = {
+            "p_hashes": hashes,
+            "p_offsets": [clip_offsets[h] for h in hashes],
+            "p_bin": bin_width,
+            "p_limit": limit,
+        }
+        try:
+            _count_request(stats)
+            rows = _read_with_retry(lambda: client.rpc("match_votes", params).execute()).data
+            return [(r["votes"], r["song_id"], r["delta"]) for r in rows]
+        except APIError as e:
+            if e.code != FUNCTION_NOT_FOUND:
+                raise
+            _rpc_missing = True
+            print("match_votes() not found: apply supabase/match_votes.sql. Using REST lookups.", flush=True)
+    return votes_in_python(query_fingerprints(hashes, stats), clip_offsets, bin_width, limit)
+
+
+def votes_in_python(
+    rows: list[dict], clip_offsets: dict[str, int], bin_width: int, limit: int = 50
+) -> list[tuple[int, int, int]]:
+    """match_votes() in Python, same rules and tie-breaks (fallback when the function is missing)."""
+    counts: dict[tuple[int, int], int] = {}
+    for r in rows:
+        delta = r["time_offset"] - clip_offsets[r["hash"]]
+        if bin_width == 2:
+            delta = round(delta / 2) * 2  # Python rounds halves to even; the SQL does the same
+        key = (r["song_id"], delta)
+        counts[key] = counts.get(key, 0) + 1
+    best: dict[int, tuple[int, int]] = {}  # song -> (votes, delta); ties -> lowest delta
+    for (song_id, delta), n in counts.items():
+        cur = best.get(song_id)
+        if cur is None or n > cur[0] or (n == cur[0] and delta < cur[1]):
+            best[song_id] = (n, delta)
+    ranked = sorted(((n, sid, d) for sid, (n, d) in best.items()), key=lambda x: (-x[0], x[1]))
+    return ranked[: max(limit, 1)]
+
+
+_stats_lock = threading.Lock()
+
+
+def _count_request(stats: dict | None) -> None:
+    if stats is not None:
+        with _stats_lock:
+            stats["requests"] = stats.get("requests", 0) + 1
+
+
+def _fetch_chunk(client: Client, chunk: list[str], stats: dict | None = None) -> list[dict]:
     """
     All rows for one chunk of hashes. A chunk is split in half and re-queried if
     its response hits the row cap, or if the database cancels it for running too
@@ -169,6 +245,7 @@ def _fetch_chunk(client: Client, chunk: list[str]) -> list[dict]:
     timeout_retries_left = 1  # for a single hash that keeps timing out
     while pending:
         part = pending.pop()
+        _count_request(stats)
         try:
             rows = _read_with_retry(
                 lambda: client.table("fingerprints")
@@ -195,7 +272,7 @@ def _fetch_chunk(client: Client, chunk: list[str]) -> list[dict]:
             mid = len(part) // 2
             pending += [part[:mid], part[mid:]]
         else:
-            results.extend(_all_rows_for_hash(client, part[0]))
+            results.extend(_all_rows_for_hash(client, part[0], stats))
     return results
 
 
@@ -215,9 +292,10 @@ def _read_with_retry(run, attempts: int = 3):
             time.sleep(0.25 * (attempt + 1))
 
 
-def _all_rows_for_hash(client: Client, hash_val: str) -> list[dict]:
+def _all_rows_for_hash(client: Client, hash_val: str, stats: dict | None = None) -> list[dict]:
     rows, start = [], 0
     while True:
+        _count_request(stats)
         page = _read_with_retry(
             lambda: client.table("fingerprints")
             .select("hash, time_offset, song_id")

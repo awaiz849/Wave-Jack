@@ -132,6 +132,7 @@ class Capture:
         self.hashes = None
         self.query_inputs = []
         self.rows = []
+        self.ranked = None  # [(votes, song_id, delta)] when the backend votes in the database
 
     @contextlib.contextmanager
     def patch(self, module, fp_name, query_name=None):
@@ -143,10 +144,13 @@ class Capture:
             self.hashes = h
             return h
 
-        def q_wrap(hash_vals):
+        def q_wrap(hash_vals, *a, **k):
             self.query_inputs.append(list(hash_vals))
-            res = orig_q(hash_vals)
-            self.rows.extend(res)
+            res = orig_q(hash_vals, *a, **k)
+            if query_name == "match_candidates":
+                self.ranked = list(res)  # the last call is the one that decided
+            else:
+                self.rows.extend(res)
             return res
 
         setattr(module, fp_name, fp_wrap)
@@ -220,6 +224,9 @@ class RequestSpy:
                 t = real.table(name)
                 return Q(t) if name == "fingerprints" else t
 
+            def rpc(self, *a, **k):  # match_votes: one request per round
+                return Q(real.rpc(*a, **k))
+
             def __getattr__(self, attr):
                 return getattr(real, attr)
 
@@ -257,7 +264,8 @@ def run_identify(clip_path):
     try:
         with contextlib.redirect_stdout(io.StringIO()):
             wav = main.convert_to_wav(tmp)
-            with cap.patch(main, "fingerprint", "query_fingerprints"), spy.install():
+            lookup = "match_candidates" if hasattr(main, "match_candidates") else "query_fingerprints"
+            with cap.patch(main, "fingerprint", lookup), spy.install():
                 try:
                     answer = main.run_recognition(wav)
                 except HTTPException as e:
@@ -269,7 +277,7 @@ def run_identify(clip_path):
     hashes = cap.hashes or []
     return {
         "answer": answer,
-        "candidates": per_song_best(votes_identify(hashes, cap.rows)),
+        "candidates": cap.ranked if cap.ranked is not None else per_song_best(votes_identify(hashes, cap.rows)),
         "n_hashes": len(hashes),
         "n_unique": len({h for h, _ in hashes}),
         "n_rows": len(cap.rows),  # rows the backend actually voted with
@@ -283,9 +291,11 @@ def run_ws(clip_path):
     data = open(clip_path, "rb").read()
     cap, spy = Capture(), RequestSpy()
     has_shared_lookup = hasattr(recognizer, "query_fingerprints")
+    in_db = hasattr(recognizer, "match_candidates")
     t0 = time.time()
     with contextlib.redirect_stdout(io.StringIO()):
-        patches = cap.patch(recognizer, "fingerprint", "query_fingerprints" if has_shared_lookup else None)
+        patches = cap.patch(recognizer, "fingerprint",
+                            "match_candidates" if in_db else ("query_fingerprints" if has_shared_lookup else None))
         with patches, spy.install():
             try:
                 hashes = recognizer.fingerprint_buffer(data)
@@ -297,9 +307,11 @@ def run_ws(clip_path):
     # Old recognizer kept hashes[:500]; the current one queries every (deduplicated) hash.
     queried = set(cap.query_inputs[0]) if cap.query_inputs else None
     n_used = len(hashes) if queried == {h for h, _ in hashes} else min(len(hashes), 500)
+    if in_db:
+        n_used = len(hashes)
     return {
         "answer": answer,
-        "candidates": per_song_best(votes_ws(hashes[:n_used], rows)),
+        "candidates": cap.ranked if in_db and cap.ranked is not None else per_song_best(votes_ws(hashes[:n_used], rows)),
         "n_hashes": len(hashes),
         "n_used": n_used,
         "n_rows": len(rows),
