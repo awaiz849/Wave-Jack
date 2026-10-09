@@ -74,12 +74,3 @@ def fingerprint(file_path):
     peaks = find_peaks(spectrogram)
     hashes = generate_hashes(peaks)
     return hashes
-
-
-if __name__ == "__main__":
-    test_file = "../data/songs/test2.mp3"
-
-    hashes = fingerprint(test_file)
-
-    print(f"Generated {len(hashes)} hashes")
-    print(hashes[:10])

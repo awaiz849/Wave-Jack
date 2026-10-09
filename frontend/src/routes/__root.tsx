@@ -1,4 +1,5 @@
 import { Outlet, Link, createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
+import { MotionConfig, useReducedMotion } from "framer-motion";
 
 import appCss from "../styles.css?url";
 
@@ -29,16 +30,24 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "WaveJack — Identify any song in seconds" },
+      {
+        name: "description",
+        content: "Tap, drop, or record audio and WaveJack tells you the song.",
+      },
+      { name: "author", content: "WaveJack" },
+      { property: "og:title", content: "WaveJack" },
+      { property: "og:description", content: "Identify any song in seconds." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
-      { name: "twitter:site", content: "@Lovable" },
     ],
     links: [
+      { rel: "preconnect", href: "https://fonts.googleapis.com" },
+      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap",
+      },
       {
         rel: "stylesheet",
         href: appCss,
@@ -65,5 +74,13 @@ function RootShell({ children }: { children: React.ReactNode }) {
 }
 
 function RootComponent() {
-  return <Outlet />;
+  // Honour the OS "reduce motion" setting for every Framer Motion animation.
+  // reducedMotion="user" only drops transform animations; the zero-duration
+  // default also makes fades instant, so nothing moves at all.
+  const reduceMotion = useReducedMotion();
+  return (
+    <MotionConfig reducedMotion="user" transition={reduceMotion ? { duration: 0 } : undefined}>
+      <Outlet />
+    </MotionConfig>
+  );
 }

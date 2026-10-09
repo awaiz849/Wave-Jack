@@ -1,5 +1,4 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Play } from "lucide-react";
 
 export type Track = {
   id: string;
@@ -9,62 +8,60 @@ export type Track = {
   highlighted?: boolean;
 };
 
-const ART_GRADIENTS = [
-  "linear-gradient(135deg, #7c3aed, #ec4899)",
-  "linear-gradient(135deg, #06b6d4, #3b82f6)",
-  "linear-gradient(135deg, #f59e0b, #ef4444)",
-  "linear-gradient(135deg, #10b981, #06b6d4)",
-  "linear-gradient(135deg, #8b5cf6, #06b6d4)",
+// Placeholder album-art tiles: dark violet/magenta/amber tints from the Aurora palette.
+const ART_TONES = [
+  "linear-gradient(135deg, #3b1d5e, #1b1626)",
+  "linear-gradient(135deg, #4a1a3d, #1b1626)",
+  "linear-gradient(135deg, #4a3214, #1b1626)",
+  "linear-gradient(135deg, #2c1f55, #1b1626)",
+  "linear-gradient(135deg, #3d1a4f, #1b1626)",
 ];
 
 export function artFor(seed: string) {
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
-  return ART_GRADIENTS[h % ART_GRADIENTS.length];
+  return ART_TONES[h % ART_TONES.length];
 }
 
 export function RecentSearches({ tracks }: { tracks: Track[] }) {
   return (
-    <div className="glass w-[340px] rounded-2xl p-5">
-      <h3 className="mb-4 text-sm font-bold tracking-wide text-white">Recent Searches</h3>
-      <div className="space-y-2">
+    <section
+      aria-labelledby="recent-searches"
+      className="panel panel-edge w-full rounded-[var(--radius)] p-5"
+    >
+      <h2
+        id="recent-searches"
+        className="font-display mb-4 text-base font-semibold text-foreground"
+      >
+        Recent searches
+      </h2>
+      <ul className="space-y-1">
         <AnimatePresence initial={false}>
           {tracks.slice(0, 5).map((t, i) => (
-            <motion.div
+            <motion.li
               key={t.id}
               layout
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 20 }}
-              className="flex items-center gap-3 rounded-xl p-2 transition-colors hover:bg-white/5"
-              style={
-                i === 0
-                  ? {
-                      background:
-                        "linear-gradient(90deg, oklch(0.55 0.24 295 / 0.5), oklch(0.45 0.2 260 / 0.3))",
-                      boxShadow: "0 0 20px oklch(0.62 0.22 295 / 0.3)",
-                    }
-                  : undefined
-              }
+              className={`flex items-center gap-3 rounded-lg p-2 transition-colors hover:bg-white/[0.04] ${i === 0 ? "bg-white/[0.03]" : ""}`}
             >
               <div
-                className="h-10 w-10 shrink-0 rounded-lg"
+                aria-hidden="true"
+                className="h-10 w-10 shrink-0 rounded-lg border border-white/[0.06]"
                 style={{ background: t.art }}
               />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold text-white">{t.title}</div>
-                <div className="truncate text-xs text-white/50">{t.artist}</div>
+                <div className="truncate text-sm font-medium text-foreground">{t.title}</div>
+                <div className="truncate text-xs text-muted-foreground">{t.artist}</div>
               </div>
-              <button className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20">
-                <Play size={14} fill="currentColor" />
-              </button>
-            </motion.div>
+            </motion.li>
           ))}
         </AnimatePresence>
-        {tracks.length === 0 && (
-          <div className="py-8 text-center text-xs text-white/40">No identifications yet</div>
-        )}
-      </div>
-    </div>
+      </ul>
+      {tracks.length === 0 && (
+        <p className="py-8 text-center text-sm text-muted-foreground">No identifications yet</p>
+      )}
+    </section>
   );
 }

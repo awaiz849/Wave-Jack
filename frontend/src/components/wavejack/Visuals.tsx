@@ -1,134 +1,61 @@
 import { useEffect, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, useInView, useReducedMotion } from "framer-motion";
 
-type Particle = { x: number; y: number; size: number; delay: number; duration: number };
+const BARS = 28;
+const idleBars = () => Array.from({ length: BARS }, (_, i) => 0.12 + ((i * 7) % 5) * 0.02);
 
-export function ParticleField() {
-  const [particles, setParticles] = useState<Particle[]>([]);
-
+/** True while the browser tab is visible (animations pause in background tabs). */
+function usePageVisible() {
+  const [visible, setVisible] = useState(true);
   useEffect(() => {
-    const arr: Particle[] = Array.from({ length: 60 }, () => ({
-      x: Math.random() * 100,
-      y: Math.random() * 100,
-      size: Math.random() * 2 + 1,
-      delay: Math.random() * 4,
-      duration: Math.random() * 4 + 3,
-    }));
-    setParticles(arr);
+    const update = () => setVisible(document.visibilityState === "visible");
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
   }, []);
-
-  return (
-    <div className="pointer-events-none fixed inset-0 overflow-hidden">
-      {particles.map((p, i) => (
-        <motion.div
-          key={i}
-          className="absolute rounded-full bg-white"
-          style={{
-            left: `${p.x}%`,
-            top: `${p.y}%`,
-            width: p.size,
-            height: p.size,
-            boxShadow: `0 0 ${p.size * 4}px rgba(180, 150, 255, 0.8)`,
-          }}
-          animate={{
-            opacity: [0.3, 1, 0.3],
-            scale: [1, 1.5, 1],
-          }}
-          transition={{
-            duration: p.duration,
-            repeat: Infinity,
-            delay: p.delay,
-            ease: "easeInOut",
-          }}
-        />
-      ))}
-    </div>
-  );
+  return visible;
 }
 
-export function WaveRibbons() {
-  return (
-    <div className="pointer-events-none fixed inset-0 overflow-hidden">
-      <svg className="absolute inset-0 h-full w-full" preserveAspectRatio="none" viewBox="0 0 1920 1080">
-        <defs>
-          <linearGradient id="purpleWave" x1="0" x2="1" y1="0" y2="0">
-            <stop offset="0%" stopColor="oklch(0.62 0.22 295)" stopOpacity="0" />
-            <stop offset="50%" stopColor="oklch(0.7 0.25 300)" stopOpacity="0.7" />
-            <stop offset="100%" stopColor="oklch(0.62 0.22 295)" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient id="cyanWave" x1="0" x2="1" y1="0" y2="0">
-            <stop offset="0%" stopColor="oklch(0.78 0.16 200)" stopOpacity="0" />
-            <stop offset="50%" stopColor="oklch(0.85 0.18 195)" stopOpacity="0.6" />
-            <stop offset="100%" stopColor="oklch(0.78 0.16 200)" stopOpacity="0" />
-          </linearGradient>
-          <filter id="glow">
-            <feGaussianBlur stdDeviation="6" />
-          </filter>
-        </defs>
-        <motion.path
-          d="M -100 400 Q 480 200 960 450 T 2020 380"
-          stroke="url(#purpleWave)"
-          strokeWidth="3"
-          fill="none"
-          filter="url(#glow)"
-          animate={{
-            d: [
-              "M -100 400 Q 480 200 960 450 T 2020 380",
-              "M -100 420 Q 480 280 960 380 T 2020 460",
-              "M -100 400 Q 480 200 960 450 T 2020 380",
-            ],
-          }}
-          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
-        />
-        <motion.path
-          d="M -100 700 Q 480 880 960 650 T 2020 720"
-          stroke="url(#cyanWave)"
-          strokeWidth="3"
-          fill="none"
-          filter="url(#glow)"
-          animate={{
-            d: [
-              "M -100 700 Q 480 880 960 650 T 2020 720",
-              "M -100 680 Q 480 800 960 720 T 2020 660",
-              "M -100 700 Q 480 880 960 650 T 2020 720",
-            ],
-          }}
-          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
-        />
-      </svg>
-    </div>
-  );
-}
-
+/**
+ * Decorative level meter — random bar heights while listening, a still,
+ * low pattern otherwise. (It isn't driven by the real mic signal.) Bars move
+ * with scaleY (a compositor-only transform), and only while recording, on
+ * screen, in a visible tab, and with motion allowed.
+ */
 export function LiveWaveform({ active }: { active: boolean }) {
-  const bars = 12;
-  const barsRef = useRef<number[]>(Array.from({ length: bars }, () => 0.3));
-  const [, force] = useState(0);
+  const [heights, setHeights] = useState(idleBars);
+  const ref = useRef<HTMLDivElement>(null);
+  const inView = useInView(ref);
+  const pageVisible = usePageVisible();
+  const reduceMotion = useReducedMotion();
+  const running = active && inView && pageVisible && !reduceMotion;
 
   useEffect(() => {
-    let raf: number;
-    const tick = () => {
-      barsRef.current = barsRef.current.map(() =>
-        active ? Math.random() * 0.85 + 0.15 : 0.15 + Math.random() * 0.15
-      );
-      force((n) => n + 1);
-      raf = window.setTimeout(() => requestAnimationFrame(tick), 80) as unknown as number;
-    };
-    tick();
-    return () => clearTimeout(raf);
-  }, [active]);
+    if (!running) {
+      setHeights(idleBars());
+      return;
+    }
+    // One plain interval, so the cleanup really stops it.
+    const id = window.setInterval(
+      () => setHeights((h) => h.map(() => Math.random() * 0.85 + 0.15)),
+      120,
+    );
+    return () => window.clearInterval(id);
+  }, [running]);
 
   return (
-    <div className="flex h-32 items-end justify-center gap-1.5">
-      {barsRef.current.map((h, i) => (
+    <div
+      ref={ref}
+      className="flex h-28 items-end justify-center gap-[3px] rounded-xl border border-[var(--border)] bg-black/30 px-3 pb-2 pt-3"
+      aria-hidden="true"
+    >
+      {heights.map((h, i) => (
         <motion.div
           key={i}
-          className="w-3 rounded-t-full"
-          style={{
-            background: `linear-gradient(to top, oklch(0.62 0.22 295), oklch(0.78 0.16 200))`,
-            boxShadow: "0 0 10px oklch(0.7 0.22 260 / 0.6)",
-          }}
-          animate={{ height: `${h * 100}%` }}
+          className="h-full w-2 origin-bottom rounded-t-[3px]"
+          style={{ background: barColor(i / (heights.length - 1)) }}
+          initial={false}
+          animate={{ scaleY: h }}
           transition={{ duration: 0.15, ease: "easeOut" }}
         />
       ))}
@@ -136,115 +63,181 @@ export function LiveWaveform({ active }: { active: boolean }) {
   );
 }
 
+// Violet → pink → amber across the bars, matching --gradient-brand.
+const STOPS: [number, number, number][] = [
+  [168, 85, 247],
+  [236, 72, 153],
+  [245, 158, 11],
+];
+function barColor(t: number) {
+  const seg = t < 0.5 ? 0 : 1;
+  const k = (t - seg * 0.5) / 0.5;
+  const [a, b] = [STOPS[seg], STOPS[seg + 1]];
+  const mix = a.map((v, j) => Math.round(v + (b[j] - v) * k));
+  return `rgb(${mix.join(" ")})`;
+}
+
 interface OrbProps {
   state: "idle" | "listening" | "processing";
   countdown: number;
+  /** Length of a recording in seconds; the ring fills over this time. */
+  total?: number;
+  /** In the extra listening time after a recording found no match yet. */
+  extended?: boolean;
 }
 
-export function MicOrb({ state, countdown }: OrbProps) {
+// Fixed tick pattern for the spectrum ring (deterministic, so it doesn't jitter on re-render).
+const TICKS = Array.from({ length: 96 }, (_, i) => 3 + ((i * 37) % 9) * 0.55);
+
+/**
+ * The interactive focal point: concentric rings, a spectrum-tick halo and a soft
+ * violet/pink glow around a dark sphere holding the mic. The outer arc fills as
+ * the countdown runs. Motion follows prefers-reduced-motion via <MotionConfig>.
+ */
+export function MicOrb({ state, countdown, total = 10, extended = false }: OrbProps) {
   const isListening = state === "listening";
   const isProcessing = state === "processing";
-  const progress = isListening ? ((10 - countdown) / 10) * 283 : 0;
+  // Loops (breathing, spinning ring) only run while listening/identifying, on
+  // screen, in a visible tab, and with motion allowed; otherwise everything is still.
+  const ref = useRef<HTMLDivElement>(null);
+  const inView = useInView(ref);
+  const pageVisible = usePageVisible();
+  const reduceMotion = useReducedMotion();
+  const canLoop = inView && pageVisible && !reduceMotion;
+  const breathe = isListening && canLoop;
+  const spin = isProcessing && canLoop;
+  // Percent of the ring to draw (pathLength=100, so it holds at any size).
+  const progress = isListening ? ((total - countdown) / total) * 100 : 0;
+  const title = isListening
+    ? extended
+      ? "Still listening"
+      : "Listening"
+    : isProcessing
+      ? "Identifying"
+      : "Tap to listen";
+  const subtitle = isListening
+    ? `${countdown}s · tap to stop`
+    : isProcessing
+      ? "matching fingerprints"
+      : "or drop an audio file";
 
   return (
-    <div className="relative flex h-[340px] w-[340px] items-center justify-center">
-      {/* Outer rings */}
-      {[0, 1, 2].map((i) => (
-        <motion.div
-          key={i}
-          className="absolute rounded-full"
-          style={{
-            width: `${100 - i * 18}%`,
-            height: `${100 - i * 18}%`,
-            border: `1.5px solid ${
-              i === 0 ? "oklch(1 0 0 / 0.15)" : i === 1 ? "oklch(0.78 0.16 200 / 0.5)" : "oklch(0.62 0.22 295 / 0.7)"
-            }`,
-            boxShadow:
-              i === 1
-                ? "0 0 40px oklch(0.78 0.16 200 / 0.4)"
-                : i === 2
-                ? "0 0 50px oklch(0.62 0.22 295 / 0.5)"
-                : "none",
-          }}
-          animate={{
-            scale: [1, 1.05, 1],
-            opacity: [0.6, 1, 0.6],
-          }}
-          transition={{
-            duration: 3 + i * 0.5,
-            repeat: Infinity,
-            ease: "easeInOut",
-            delay: i * 0.3,
-          }}
-        />
-      ))}
-
-      {/* Progress arc */}
-      {isListening && (
-        <svg className="absolute inset-0 h-full w-full -rotate-90">
-          <circle
-            cx="50%"
-            cy="50%"
-            r="45%"
-            fill="none"
-            stroke="oklch(0.85 0.18 195)"
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeDasharray={`${progress} 283`}
-            style={{ filter: "drop-shadow(0 0 8px oklch(0.85 0.18 195))" }}
-          />
-        </svg>
-      )}
-
-      {/* Inner orb */}
-      <motion.div
-        className="relative flex h-[58%] w-[58%] items-center justify-center rounded-full"
+    <div
+      ref={ref}
+      className="relative flex h-[280px] w-[280px] items-center justify-center sm:h-[340px] sm:w-[340px]"
+      aria-hidden="true"
+    >
+      {/* Ambient glow: a plain radial gradient that fades out on its own (no blur
+          filter); only its opacity changes. */}
+      <div
+        className="absolute -inset-[6%] rounded-full"
         style={{
           background:
-            "radial-gradient(circle at 30% 30%, oklch(0.35 0.15 290), oklch(0.12 0.06 280) 70%)",
-          boxShadow:
-            "inset 0 0 40px oklch(0 0 0 / 0.6), 0 0 60px oklch(0.62 0.22 295 / 0.5)",
+            "radial-gradient(circle, rgb(168 85 247 / 0.32) 0%, rgb(236 72 153 / 0.16) 38%, rgb(236 72 153 / 0.05) 55%, transparent 70%)",
+          opacity: isListening ? 1 : 0.65,
+          transition: "opacity 0.4s ease",
         }}
+      />
+      {/* Concentric hairline rings */}
+      <div className="absolute -inset-[12%] rounded-full border border-white/[0.04]" />
+      <div className="absolute inset-0 rounded-full border border-[rgb(245_158_11/0.22)]" />
+
+      {/* Spectrum ticks */}
+      <motion.svg
+        viewBox="0 0 100 100"
+        className="absolute inset-[7%] h-[86%] w-[86%]"
         animate={
-          isProcessing
-            ? { rotate: 360 }
-            : { scale: [1, 1.04, 1] }
+          spin ? { rotate: 360 } : breathe ? { scale: [1, 1.03, 1] } : { rotate: 0, scale: 1 }
         }
         transition={
-          isProcessing
-            ? { duration: 2, repeat: Infinity, ease: "linear" }
-            : { duration: 3, repeat: Infinity, ease: "easeInOut" }
+          spin
+            ? { duration: 6, repeat: Infinity, ease: "linear" }
+            : { duration: 1.2, repeat: breathe ? Infinity : 0, ease: "easeInOut" }
         }
       >
-        <MicIcon />
+        <defs>
+          <linearGradient id="orb-ticks" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#a855f7" />
+            <stop offset="55%" stopColor="#ec4899" />
+            <stop offset="100%" stopColor="#f59e0b" />
+          </linearGradient>
+        </defs>
+        {TICKS.map((len, i) => {
+          const a = (i / TICKS.length) * Math.PI * 2;
+          const r1 = 40;
+          const r2 = r1 + len * (isListening ? 1.25 : 1);
+          return (
+            <line
+              key={i}
+              x1={50 + r1 * Math.cos(a)}
+              y1={50 + r1 * Math.sin(a)}
+              x2={50 + r2 * Math.cos(a)}
+              y2={50 + r2 * Math.sin(a)}
+              stroke="url(#orb-ticks)"
+              strokeWidth="0.55"
+              strokeLinecap="round"
+              opacity={0.75}
+            />
+          );
+        })}
+      </motion.svg>
+
+      {/* Countdown arc */}
+      <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full -rotate-90">
+        <defs>
+          <linearGradient id="orb-progress" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#a855f7" />
+            <stop offset="100%" stopColor="#ec4899" />
+          </linearGradient>
+        </defs>
+        <circle
+          cx="50"
+          cy="50"
+          r="49.4"
+          fill="none"
+          stroke="url(#orb-progress)"
+          opacity={progress > 0 ? 1 : 0}
+          strokeWidth="1"
+          strokeLinecap="round"
+          pathLength={100}
+          strokeDasharray={`${progress} 100`}
+        />
+      </svg>
+
+      {/* Sphere */}
+      <motion.div
+        className="relative flex h-[56%] w-[56%] flex-col items-center justify-center rounded-full border border-white/10"
+        style={{
+          background: "radial-gradient(circle at 35% 28%, #241c34 0%, #120e1b 55%, #0b0812 100%)",
+        }}
+        animate={breathe ? { scale: [1, 1.025, 1] } : { scale: 1 }}
+        transition={{ duration: 1.6, repeat: breathe ? Infinity : 0, ease: "easeInOut" }}
+      >
+        <span className="bg-gradient-icon flex h-14 w-14 items-center justify-center rounded-2xl p-[1.5px]">
+          <span
+            className="flex h-full w-full items-center justify-center rounded-[14px]"
+            style={{ background: isListening ? "transparent" : "#120e1b" }}
+          >
+            <MicIcon />
+          </span>
+        </span>
+        <span className="font-display mt-3 text-sm font-bold uppercase tracking-[0.12em] text-foreground">
+          {title}
+        </span>
+        <span className="font-signal mt-1 text-[11px] text-accent">{subtitle}</span>
       </motion.div>
     </div>
   );
 }
 
 function MicIcon() {
+  const stroke = "#f6f3fb";
   return (
-    <svg width="80" height="80" viewBox="0 0 64 64" fill="none">
-      <defs>
-        <linearGradient id="chromeMic" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#f8f8ff" />
-          <stop offset="40%" stopColor="#c0c0d0" />
-          <stop offset="70%" stopColor="#6a6a85" />
-          <stop offset="100%" stopColor="#2a2a40" />
-        </linearGradient>
-        <linearGradient id="chromeStand" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="#5a5a75" />
-          <stop offset="50%" stopColor="#e0e0ee" />
-          <stop offset="100%" stopColor="#3a3a55" />
-        </linearGradient>
-      </defs>
-      <rect x="22" y="8" width="20" height="32" rx="10" fill="url(#chromeMic)" stroke="#1a1a2e" strokeWidth="0.5" />
-      <rect x="25" y="13" width="14" height="2" rx="1" fill="#1a1a2e" opacity="0.4" />
-      <rect x="25" y="18" width="14" height="2" rx="1" fill="#1a1a2e" opacity="0.4" />
-      <rect x="25" y="23" width="14" height="2" rx="1" fill="#1a1a2e" opacity="0.4" />
-      <path d="M16 36 Q16 48 32 48 Q48 48 48 36" stroke="url(#chromeStand)" strokeWidth="3" fill="none" strokeLinecap="round" />
-      <line x1="32" y1="48" x2="32" y2="56" stroke="url(#chromeStand)" strokeWidth="3" strokeLinecap="round" />
-      <rect x="24" y="55" width="16" height="3" rx="1.5" fill="url(#chromeStand)" />
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+      <rect x="9" y="2" width="6" height="12" rx="3" stroke={stroke} strokeWidth="2" />
+      <path d="M5 11a7 7 0 0 0 14 0" stroke={stroke} strokeWidth="2" strokeLinecap="round" />
+      <line x1="12" y1="18" x2="12" y2="22" stroke={stroke} strokeWidth="2" strokeLinecap="round" />
+      <line x1="8" y1="22" x2="16" y2="22" stroke={stroke} strokeWidth="2" strokeLinecap="round" />
     </svg>
   );
 }
