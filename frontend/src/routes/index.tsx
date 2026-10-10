@@ -173,6 +173,8 @@ function WaveJack() {
     silenceCheckRef.current = { ctx, timer };
   };
   const wsRef = useRef<WebSocket | null>(null);
+  // Sends to the current session's socket, queueing while it connects (set per session).
+  const socketSendRef = useRef<((item: Blob | string) => void) | null>(null);
   const cdTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const waitingForResultRef = useRef(false);
@@ -302,6 +304,37 @@ function WaveJack() {
       const ws = new WebSocket(`${WS_URL}/ws/recognize`);
       wsRef.current = ws;
 
+      // The recorder starts right away, but the socket can take longer than one
+      // CHUNK_MS to open (a slow TLS handshake to a far server). The first piece
+      // carries the WebM header, so no piece may be dropped: queue them while the
+      // socket connects and send them in order once it opens. Nothing is sent
+      // after the socket starts closing.
+      const pending: (Blob | string)[] = [];
+      const transmit = (item: Blob | string) => {
+        ws.send(item);
+        if (DEV && item instanceof Blob) {
+          if (debugTimingRef.current.firstChunkAt === null) {
+            markTiming({ firstChunkAt: performance.now() });
+          }
+          debugChunksRef.current.push(item); // exactly the bytes the backend receives
+          setDebugSent((s) => ({ ...s, chunks: s.chunks + 1, bytes: s.bytes + item.size }));
+        }
+      };
+      const flushPending = () => {
+        for (const item of pending.splice(0)) transmit(item);
+      };
+      const sendOrQueue = (item: Blob | string) => {
+        if (ws.readyState === WebSocket.CONNECTING) {
+          pending.push(item);
+        } else if (ws.readyState === WebSocket.OPEN) {
+          pending.push(item);
+          flushPending(); // keeps order even if anything is still queued
+        }
+        // CLOSING / CLOSED: the session is over; drop it.
+      };
+      socketSendRef.current = sendOrQueue;
+      ws.onopen = flushPending;
+
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (DEV) {
@@ -340,6 +373,8 @@ function WaveJack() {
       };
 
       ws.onclose = () => {
+        pending.length = 0; // never sent: the socket is gone
+        if (socketSendRef.current === sendOrQueue) socketSendRef.current = null;
         clearProcessingTimeout(); // socket is gone either way, no point waiting on it
         if (matchFoundRef.current) return; // result is already on screen
         endRecording();
@@ -355,6 +390,7 @@ function WaveJack() {
       };
 
       ws.onerror = () => {
+        pending.length = 0;
         clearProcessingTimeout(); // FIX
         waitingForResultRef.current = false; // onclose follows; this message wins
         endRecording();
@@ -365,16 +401,7 @@ function WaveJack() {
       recorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-          ws.send(e.data);
-          if (DEV) {
-            if (debugTimingRef.current.firstChunkAt === null) {
-              markTiming({ firstChunkAt: performance.now() });
-            }
-            debugChunksRef.current.push(e.data); // exactly the bytes the backend receives
-            setDebugSent((s) => ({ ...s, chunks: s.chunks + 1, bytes: s.bytes + e.data.size }));
-          }
-        }
+        if (e.data.size > 0) sendOrQueue(e.data);
       };
       if (DEV) {
         setDebugSent((s) => ({ ...s, mimeType: recorder.mimeType }));
@@ -464,11 +491,10 @@ function WaveJack() {
     waitingForResultRef.current = true;
     setState("processing");
     armProcessingTimeout(); // FIX: guarantee we leave "processing" even if the socket dies silently
-    // give recorder time to flush final chunk then signal done
+    // give recorder time to flush final chunk then signal done (queued behind any
+    // pieces still waiting for the socket to open; dropped if it has closed)
     setTimeout(() => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "done" }));
-      }
+      socketSendRef.current?.(JSON.stringify({ type: "done" }));
     }, 500);
   };
   // ── PROCESS AUDIO ──
