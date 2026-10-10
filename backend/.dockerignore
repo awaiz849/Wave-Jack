@@ -1,0 +1,20 @@
+# Local environments and caches
+.venv
+venv
+__pycache__
+*.pyc
+
+# Secrets: set these as Space secrets/variables instead
+.env
+.env.*
+
+# Audio and local data
+data/
+*.mp3
+*.m4a
+*.wav
+*.webm
+
+# Not needed in the image
+Dockerfile
+.dockerignore
